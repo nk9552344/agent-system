@@ -1,0 +1,45 @@
+# Coordinator and specialist agent configuration.
+# Edit this file to add/remove models or change expertise routing.
+
+coordinator:
+  model: "qwen2.5:14b"         # The manager — should be a capable reasoner
+  base_url: "http://localhost:11434"
+  temperature: 0
+  num_ctx: 16384
+
+# Each entry below becomes one specialist agent.
+# The coordinator's LLM reads 'description' to decide which agent to use.
+# 'expertise' is also injected into the coordinator's routing prompt.
+agents:
+  - name: "coder"
+    model: "qwen2.5-coder:7b"
+    base_url: "http://localhost:11434"
+    temperature: 0
+    num_ctx: 8192
+    expertise:
+      - "python"
+      - "typescript"
+      - "code generation"
+      - "debugging"
+      - "testing"
+      - "refactoring"
+    description: >
+      Expert software developer. Delegate here for: writing new code, fixing
+      bugs, adding tests, refactoring, code review, and any implementation work.
+      Works autonomously using file tools and a shell.
+
+  - name: "researcher"
+    model: "llama3.2:latest"
+    base_url: "http://localhost:11434"
+    temperature: 0.3
+    num_ctx: 8192
+    expertise:
+      - "research"
+      - "documentation"
+      - "technical writing"
+      - "analysis"
+      - "summarization"
+    description: >
+      Expert technical researcher and writer. Delegate here for: writing
+      documentation, README files, architecture notes, summarizing findings,
+      and any research or writing-heavy subtask.

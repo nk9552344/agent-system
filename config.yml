@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Multi-Agent System — root configuration
+# Run: python main.py
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Which mode to run: "agent" | "coordinator" | "researcher"
+mode: agent
+
+# ─── Standalone agent (mode: agent) ──────────────────────────────────────────
+agent:
+  model: qwen2.5-coder:7b
+  base_url: http://localhost:11434
+  temperature: 0.0
+  num_ctx: 8192
+  name: agent
+  workspace: .
+  system_prompt: null        # optional — leave null to use the default
+  require_permission: true   # ask before file writes and shell commands
+
+# ─── Coordinator (mode: coordinator) ─────────────────────────────────────────
+coordinator:
+  config: coordinator/config.yml   # specialist roster (models + expertise)
+  workspace: .
+  cleanup_worktrees: false         # set true to delete git worktrees on exit
+
+# ─── Auto Researcher (mode: researcher) ──────────────────────────────────────
+# The researcher runs in an infinite loop, proposing and testing hypotheses
+# to improve a user-defined score.  Press Ctrl+C to stop.
+researcher:
+  config: coordinator/config.yml   # specialist roster (same as coordinator)
+  workspace: /path/to/your/project # the project being improved (must be a git repo)
+  user_tools: workspace_tools_example.py  # Python file with evaluate() + save()
+
+# ─── Shared storage ───────────────────────────────────────────────────────────
+storage:
+  path: data/lancedb
+  embedding_model: nomic-embed-text
+
+# ─── Misc ─────────────────────────────────────────────────────────────────────
+debug: false

@@ -1,0 +1,71 @@
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+wheels/
+.eggs/
+
+# ─── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ─── uv ───────────────────────────────────────────────────────────────────────
+# uv.lock is intentionally committed — do not add it here
+
+# ─── Environment / secrets ────────────────────────────────────────────────────
+.env
+.env.*
+*.env
+!.env.example
+
+# ─── LanceDB data — managed externally, never committed ──────────────────────
+data/lancedb/
+data/*.db
+data/*.lance/
+
+# ─── Git worktrees — created at runtime by coordinator / researcher ───────────
+.agent-worktrees/
+
+# ─── Research artefacts ───────────────────────────────────────────────────────
+research_log.txt
+
+# ─── OS / editor ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# ─── Testing / coverage ───────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+/tmp/pytest_*.json
+
+# ─── Type checkers / linters ──────────────────────────────────────────────────
+.mypy_cache/
+.ruff_cache/
+.pyright/
+
+# ─── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
