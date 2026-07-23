@@ -58,7 +58,7 @@ agentx --version
 curl -fsSL https://raw.githubusercontent.com/nk1044/agentx/main/install.sh | bash
 ```
 
-Tries the pre-built binary first; falls back to `uv tool install` or `pip install` if no binary exists for your platform.
+Tries the pre-built binary first; falls back to installing from source via `uv tool install` or `pip install` (from GitHub, not PyPI) if no binary exists for your platform.
 
 ### Option 3 — Install from source (needs Python 3.13 + uv)
 
@@ -335,9 +335,10 @@ Or set the env var: `LANGCHAIN_VERBOSE=true`
 ### Binary distribution
 
 ```bash
-# Build a single-file binary (includes Python interpreter)
-pip install pyinstaller
-pyinstaller --onefile --name agentx --add-data "cli/templates:cli/templates" cli/app.py
+# Build a single-file binary for the current platform (includes Python interpreter)
+./build_binary.sh
+# Output: dist/agentx-<os>-<arch>
 
-# Distribute: copy dist/agentx to any machine (no Python installation needed)
+# Distribute: copy the binary to any machine — no Python installation needed
+sudo cp dist/agentx-linux-x86_64 /usr/local/bin/agentx
 ```

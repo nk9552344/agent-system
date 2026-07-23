@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-#  release.yml — Build platform binaries + publish to PyPI on every  v*  tag
+#  release.yml — Build platform binaries and publish to GitHub Releases
 #
 #  Trigger:
 #    git tag v1.0.0
@@ -12,11 +12,6 @@
 #      agentx-macos-x86_64
 #      agentx-macos-arm64
 #      agentx-windows-x86_64.exe
-#    PyPI package (pip install agentx)
-#
-#  Secrets required  (Settings → Secrets → Actions):
-#    PYPI_API_TOKEN  — token from pypi.org (for PyPI publishing)
-#                      Not needed if you only want GitHub Releases binaries.
 # ══════════════════════════════════════════════════════════════════════════════
 
 name: Release
@@ -134,31 +129,6 @@ jobs:
           name: ${{ matrix.asset-name }}
           path: dist/${{ matrix.asset-name }}
           retention-days: 1
-
-  # ── Publish to PyPI ───────────────────────────────────────────────────────────
-  publish-pypi:
-    name: Publish → PyPI
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write   # for trusted publishing (no API token needed)
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Build wheel + sdist
-        run: |
-          pip install build
-          python -m build
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        # Uses OIDC trusted publishing — no token needed if configured on PyPI.
-        # Alternatively: with: password: ${{ secrets.PYPI_API_TOKEN }}
 
   # ── Create GitHub Release with all binaries ───────────────────────────────────
   create-release:
