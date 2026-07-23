@@ -411,6 +411,120 @@ class OllamaDeepAgent:
             except Exception:
                 state = {}
 
+    def stream_events(
+        self,
+        task: str,
+        *,
+        thread_id: str | None = None,
+        auto_approve: bool = True,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream all agent activity as structured events for real-time TUI display.
+
+        Yields dicts with shape:
+          {"kind": "token",       "text": str, "node": str}
+          {"kind": "tool_call",   "text": str, "tool": str, "args": dict, "id": str, "node": str}
+          {"kind": "tool_result", "text": str, "tool": str, "id": str,   "node": str}
+          {"kind": "status",      "text": str}
+          {"kind": "error",       "text": str}
+        """
+        from langchain_core.messages import (
+            AIMessage, AIMessageChunk, HumanMessage, ToolMessage,
+        )
+        from langgraph.types import Command
+
+        tid = thread_id or self.new_thread_id()
+        config = {"configurable": {"thread_id": tid}}
+        emitted_tool_ids: set[str] = set()
+        saw_tokens = False
+
+        def _parse(item: Any) -> Iterator[dict[str, Any]]:
+            nonlocal saw_tokens
+
+            if isinstance(item, tuple) and len(item) >= 2:
+                chunk, meta = item[0], item[1]
+            elif isinstance(item, tuple):
+                chunk, meta = item[0], {}
+            else:
+                chunk, meta = item, {}
+
+            node: str = meta.get("langgraph_node", "") if isinstance(meta, dict) else ""
+
+            if isinstance(chunk, HumanMessage):
+                return  # skip — already shown in TUI
+
+            elif isinstance(chunk, AIMessageChunk):
+                content = chunk.content
+                if isinstance(content, str) and content:
+                    saw_tokens = True
+                    yield {"kind": "token", "text": content, "node": node}
+                elif isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            t = part.get("text", "")
+                            if t:
+                                saw_tokens = True
+                                yield {"kind": "token", "text": t, "node": node}
+
+                for tc in getattr(chunk, "tool_call_chunks", []) or []:
+                    _id  = (tc.get("id")   if isinstance(tc, dict) else getattr(tc, "id",   "")) or ""
+                    name = (tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")) or ""
+                    if name and _id and _id not in emitted_tool_ids:
+                        emitted_tool_ids.add(_id)
+                        yield {"kind": "tool_call", "text": name, "tool": name,
+                               "args": {}, "id": _id, "node": node}
+
+            elif isinstance(chunk, AIMessage):
+                if not saw_tokens:
+                    content = chunk.content
+                    if isinstance(content, str) and content.strip():
+                        yield {"kind": "token", "text": content, "node": node}
+                saw_tokens = False
+
+                for tc in getattr(chunk, "tool_calls", []) or []:
+                    _id  = (tc.get("id")   if isinstance(tc, dict) else getattr(tc, "id",   "")) or ""
+                    name = (tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")) or ""
+                    args = (tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", {})) or {}
+                    if name and _id and _id not in emitted_tool_ids:
+                        emitted_tool_ids.add(_id)
+                        yield {"kind": "tool_call", "text": name, "tool": name,
+                               "args": args, "id": _id, "node": node}
+
+            elif isinstance(chunk, ToolMessage):
+                saw_tokens = False
+                yield {
+                    "kind": "tool_result",
+                    "text": str(chunk.content or ""),
+                    "tool": getattr(chunk, "name", "") or "",
+                    "id":   getattr(chunk, "tool_call_id", "") or "",
+                    "node": node,
+                }
+
+        inp: Any = {"messages": task}
+        while True:
+            try:
+                for item in self._graph.stream(inp, config=config, stream_mode="messages"):
+                    yield from _parse(item)
+            except Exception as exc:
+                yield {"kind": "error", "text": str(exc)}
+                break
+
+            try:
+                snap  = self._graph.get_state(config)
+                state = snap.values if snap else {}
+            except Exception:
+                break
+
+            if not state.get("__interrupt__"):
+                break
+
+            interrupt = state["__interrupt__"][0]
+            if auto_approve:
+                yield {"kind": "status", "text": "Auto-approving action…"}
+                inp = Command(resume=True)
+            else:
+                approved = self._handle_interrupt(interrupt, auto_approve=False)
+                inp = Command(resume=approved)
+
     def invoke_raw(
         self,
         input_: dict[str, Any],

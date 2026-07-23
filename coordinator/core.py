@@ -273,6 +273,10 @@ class Coordinator:
         """Stream coordinator output token by token."""
         yield from self._agent.stream(task, **kwargs)
 
+    def stream_events(self, task: str, **kwargs: Any) -> Iterator[dict[str, Any]]:
+        """Stream all coordinator and specialist activity as structured events."""
+        yield from self._agent.stream_events(task, **kwargs)
+
     def cleanup(self) -> None:
         """Remove all specialist git worktrees. Call after a project is done."""
         self._worktree_mgr.cleanup()

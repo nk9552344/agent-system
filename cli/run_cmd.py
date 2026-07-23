@@ -78,6 +78,7 @@ def run_researcher_mode(cfg: CliConfig, initial_prompt: str | None) -> None:
         mode="researcher",
         model=cfg.model.name,
         initial_prompt=initial_prompt,
+        specialist_names=[spec.name for spec in coord_cfg.agents],
     )
 
 
@@ -109,9 +110,22 @@ def _open_store(cfg: CliConfig):
         return None
 
 
-def _launch_tui(runner, *, mode: str, model: str, initial_prompt: str | None) -> None:
+def _launch_tui(
+    runner,
+    *,
+    mode: str,
+    model: str,
+    initial_prompt: str | None,
+    specialist_names: list[str] | None = None,
+) -> None:
     from cli.tui import AgentTUI
-    app = AgentTUI(runner=runner, mode=mode, model=model, initial_prompt=initial_prompt)
+    app = AgentTUI(
+        runner=runner,
+        mode=mode,
+        model=model,
+        initial_prompt=initial_prompt,
+        specialist_names=specialist_names or [],
+    )
     app.run()
 
 

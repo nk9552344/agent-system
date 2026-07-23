@@ -1,38 +1,38 @@
-"""Color constants for Rich terminal output (non-TUI commands)."""
+"""Color constants — warm dark / orange theme (Claude Code inspired)."""
 
-# Core palette — Midnight Slate theme
-CYAN    = "#06B6D4"   # primary accent
-BLUE    = "#38BDF8"   # secondary accent / highlights
-ORANGE  = "#F97316"   # commands, important callouts
-AMBER   = "#FBBF24"   # warnings, tool calls
-GREEN   = "#22C55E"   # success
-RED     = "#F87171"   # errors
+# ── Core palette ──────────────────────────────────────────────────────────────
+ORANGE    = "#F97316"   # orange-500  — primary accent, commands
+ORANGE_BR = "#FB923C"   # orange-400  — bright orange, highlights
+AMBER     = "#FBBF24"   # amber-400   — warnings, tool calls
+GREEN     = "#86EFAC"   # green-300   — success
+RED       = "#FCA5A5"   # red-300     — errors
 
-# Backward-compat aliases (primary / secondary accent)
-PURPLE  = CYAN
-VIOLET  = BLUE
+# ── Text ─────────────────────────────────────────────────────────────────────
+TEXT   = "#F5F5F4"   # stone-100  — primary text
+DIM    = "#78716C"   # stone-500  — muted / secondary
+MUTED  = "#44403C"   # stone-700  — very muted, borders
 
-# Text
-TEXT    = "#F1F5F9"   # primary text (slate-100)
-DIM     = "#64748B"   # muted text (slate-500)
-MUTED   = "#1E293B"   # very muted / backgrounds
+# ── Backgrounds ───────────────────────────────────────────────────────────────
+BG_DEEP   = "#1C1917"   # stone-900  — main terminal background
+BG_HEADER = "#292524"   # stone-800  — header / footer bar
 
-# Background tones
-BG_DEEP   = "#0F172A"   # slate-900 main background
-BG_HEADER = "#1E293B"   # slate-800 header / footer
-BG_FOOTER = "#151F2E"   # slightly deeper footer
+# ── Rich markup helpers ───────────────────────────────────────────────────────
+def orange(s: str)  -> str: return f"[{ORANGE}]{s}[/{ORANGE}]"
+def amber(s: str)   -> str: return f"[{AMBER}]{s}[/{AMBER}]"
+def green(s: str)   -> str: return f"[{GREEN}]{s}[/{GREEN}]"
+def red(s: str)     -> str: return f"[{RED}]{s}[/{RED}]"
+def dim(s: str)     -> str: return f"[{DIM}]{s}[/{DIM}]"
+def bold(s: str)    -> str: return f"[bold]{s}[/bold]"
 
-# Rich markup helpers (use inside [bracket] syntax)
-def cyan(s: str)   -> str:  return f"[{CYAN}]{s}[/{CYAN}]"
-def blue(s: str)   -> str:  return f"[{BLUE}]{s}[/{BLUE}]"
-def orange(s: str) -> str:  return f"[{ORANGE}]{s}[/{ORANGE}]"
-def purple(s: str) -> str:  return cyan(s)   # compat — maps to primary accent
-def violet(s: str) -> str:  return blue(s)   # compat — maps to secondary accent
-def amber(s: str)  -> str:  return f"[{AMBER}]{s}[/{AMBER}]"
-def green(s: str)  -> str:  return f"[{GREEN}]{s}[/{GREEN}]"
-def red(s: str)    -> str:  return f"[{RED}]{s}[/{RED}]"
-def dim(s: str)    -> str:  return f"[{DIM}]{s}[/{DIM}]"
-def bold(s: str)   -> str:  return f"[bold]{s}[/bold]"
+# Compat aliases used by init_cmd / run_cmd
+def purple(s: str)  -> str: return orange(s)
+def violet(s: str)  -> str: return orange(s)
+def cyan(s: str)    -> str: return orange(s)
+def blue(s: str)    -> str: return amber(s)
 
-LOGO = f"[bold {CYAN}]◆ AGENTX[/bold {CYAN}]"
+CYAN   = ORANGE   # alias — used by init_cmd border_style
+PURPLE = ORANGE   # alias
+VIOLET = ORANGE_BR
+
+LOGO = f"[bold {ORANGE}]◆ AGENTX[/bold {ORANGE}]"
 SEP  = f"[{DIM}]─[/{DIM}]"
