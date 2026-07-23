@@ -43,19 +43,7 @@ from deepagents import (
     create_deep_agent,
 )
 from deepagents.middleware.async_subagents import AsyncSubAgent
-from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware
-from deepagents.backends import FilesystemBackend, LocalShellBackend
-
-# deepagents' built-in file tools require ABSOLUTE paths via a 'file_path' parameter.
-# Models naturally use relative paths with 'path'.  We provide workspace-scoped
-# replacements in make_file_tools that accept relative paths — these names must be
-# excluded from the deepagents tool list so only our versions are visible.
-_REPLACED_TOOLS: frozenset[str] = frozenset({
-    "write_file",
-    "read_file",
-    "edit_file",
-    "list_directory",
-})
+from deepagents.backends import LocalShellBackend
 
 from agent.config import AgentConfig
 from storage.memory_store import SharedMemoryStore
@@ -110,8 +98,6 @@ class OllamaDeepAgent:
         the agent if the rubric criterion isn't met (up to 3 iterations).
     execute_timeout:
         Max seconds for the built-in ``execute`` shell tool.
-    shell_snippet_timeout:
-        Max seconds for ``run_python_snippet`` tool.
     extra_tools:
         Additional tools to include alongside the built-in suite.
     debug:
@@ -149,7 +135,6 @@ class OllamaDeepAgent:
         rubric: str | None = None,
         # --- Timeouts ---
         execute_timeout: int = 120,
-        shell_snippet_timeout: int = 30,
         # --- Sub-agents (for coordinator role) ---
         subagents: Sequence[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
         # --- Extra ---
@@ -225,10 +210,6 @@ class OllamaDeepAgent:
         # --- Middleware -----------------------------------------------------------
         middleware: list[Any] = []
 
-        # Exclude deepagents' built-in file tools that require absolute 'file_path'.
-        # Our workspace-scoped replacements (in make_file_tools) use relative 'path'.
-        middleware.append(_ToolExclusionMiddleware(excluded=_REPLACED_TOOLS))
-
         if memory_files:
             fs_backend = FilesystemBackend(root_dir="/")
             middleware.append(
@@ -263,7 +244,6 @@ class OllamaDeepAgent:
             workspace_dir=workspace,
             memory_store=self._memory_store,
             agent_name=name,
-            shell_timeout=shell_snippet_timeout,
             web_config=web_config,
         )
         all_tools: list[BaseTool | Callable] = [*custom_tools, *(extra_tools or [])]
