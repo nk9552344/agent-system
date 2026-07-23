@@ -48,16 +48,10 @@ def run_init(force: bool = False) -> None:
     # ── agent_storage/ (lancedb created at runtime) ──────────────────────────
     storage_dir = agentx_dir / "agent_storage"
     storage_dir.mkdir(exist_ok=True)
-
-    gi_dst = storage_dir / ".gitignore"
-    if not gi_dst.exists():
-        gi_src = _TEMPLATES / "storage_gitignore"
-        gi_dst.write_text(gi_src.read_text(encoding="utf-8"), encoding="utf-8")
-
     _ok(f"{AGENTX_DIR}/agent_storage/  (lancedb DB created on first run)")
 
-    # ── Patch project .gitignore ─────────────────────────────────────────────
-    _patch_gitignore(cwd)
+    # ── .agentx/.gitignore — keeps runtime data out of the repo ─────────────
+    _write_agentx_gitignore(agentx_dir)
 
     # ── Next steps ────────────────────────────────────────────────────────────
     console.print()
@@ -88,21 +82,12 @@ def run_init(force: bool = False) -> None:
     console.print()
 
 
-def _patch_gitignore(cwd: Path) -> None:
-    """Add .agentx/agent_storage/ to the project .gitignore if present."""
-    gi = cwd / ".gitignore"
-    marker = f"{AGENTX_DIR}/agent_storage/"
-
-    if gi.exists():
-        content = gi.read_text(encoding="utf-8")
-        if marker in content:
-            return
-        newline = "" if content.endswith("\n") else "\n"
-        gi.write_text(
-            f"{content}{newline}\n# AgentX — vector database (do not commit)\n{marker}\n",
-            encoding="utf-8",
-        )
-        _ok(f".gitignore  (added {marker})")
+def _write_agentx_gitignore(agentx_dir: Path) -> None:
+    """Write .agentx/.gitignore keeping worktrees and storage out of git."""
+    from coordinator.git_worktree import _AGENTX_GITIGNORE_CONTENT
+    gi = agentx_dir / ".gitignore"
+    gi.write_text(_AGENTX_GITIGNORE_CONTENT, encoding="utf-8")
+    _ok(f"{AGENTX_DIR}/.gitignore")
 
 
 def _ok(label: str) -> None:

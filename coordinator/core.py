@@ -157,6 +157,7 @@ class Coordinator:
         memory_store: SharedMemoryStore | None = None,
         web_config: WebConfig | None = None,
         debug: bool = False,
+        workspace_prompt_prefix: str = "",
         *,
         config_path: str | Path | None = None,  # legacy — use coordinator_config instead
     ) -> None:
@@ -223,7 +224,7 @@ class Coordinator:
         coord_tools = self._make_coordinator_tools(cfg)
 
         # --- Build coordinator agent (is itself an OllamaDeepAgent) ---------------
-        coord_prompt = _COORDINATOR_PROMPT.format(
+        coord_prompt = workspace_prompt_prefix + _COORDINATOR_PROMPT.format(
             agent_roster=_build_roster(cfg.agents),
             max_retries=MAX_RETRIES,
         )

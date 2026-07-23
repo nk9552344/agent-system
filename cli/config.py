@@ -62,12 +62,26 @@ class CliConfig:
 
     @classmethod
     def load(cls, path: str | Path = CONFIG_FILENAME) -> "CliConfig":
-        p = Path(path)
+        p = Path(path).resolve()
         if not p.exists():
             raise ConfigError(
                 f"Config file not found: {p}\n"
                 f"Run  agentx init  to create .agentx/agent_config.yml in this directory."
             )
+
+        # Project root = directory that CONTAINS the .agentx/ folder.
+        # Resolving workspace strings relative to it ensures the agent always
+        # lands in the correct project directory regardless of where `agentx`
+        # is invoked from.
+        if p.parent.name.lower() == ".agentx":
+            project_root = p.parent.parent
+        else:
+            project_root = p.parent  # config is at a custom path — use its dir
+
+        def _abs(ws: str) -> str:
+            """Return an absolute workspace path anchored to project_root."""
+            q = Path(ws)
+            return str((project_root / q).resolve() if not q.is_absolute() else q)
 
         raw: dict = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
 
@@ -85,14 +99,14 @@ class CliConfig:
         a = raw.get("agent", {})
         agent = AgentConfig(
             name=a.get("name", "agent"),
-            workspace=a.get("workspace", "."),
+            workspace=_abs(a.get("workspace", ".")),
             system_prompt=a.get("system_prompt") or None,
             require_permission=bool(a.get("require_permission", True)),
         )
 
         r = raw.get("researcher", {})
         researcher = ResearcherConfig(
-            workspace=r.get("workspace", "."),
+            workspace=_abs(r.get("workspace", ".")),
             eval_script=r.get("eval_script") or None,
         )
 

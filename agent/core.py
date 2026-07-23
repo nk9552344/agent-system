@@ -43,7 +43,19 @@ from deepagents import (
     create_deep_agent,
 )
 from deepagents.middleware.async_subagents import AsyncSubAgent
+from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware
 from deepagents.backends import FilesystemBackend, LocalShellBackend
+
+# deepagents' built-in file tools require ABSOLUTE paths via a 'file_path' parameter.
+# Models naturally use relative paths with 'path'.  We provide workspace-scoped
+# replacements in make_file_tools that accept relative paths — these names must be
+# excluded from the deepagents tool list so only our versions are visible.
+_REPLACED_TOOLS: frozenset[str] = frozenset({
+    "write_file",
+    "read_file",
+    "edit_file",
+    "list_directory",
+})
 
 from agent.config import AgentConfig
 from storage.memory_store import SharedMemoryStore
@@ -217,6 +229,10 @@ class OllamaDeepAgent:
         # --- Middleware -----------------------------------------------------------
         middleware: list[Any] = []
 
+        # Exclude deepagents' built-in file tools that require absolute 'file_path'.
+        # Our workspace-scoped replacements (in make_file_tools) use relative 'path'.
+        middleware.append(_ToolExclusionMiddleware(excluded=_REPLACED_TOOLS))
+
         if memory_files:
             fs_backend = FilesystemBackend(root_dir="/")
             middleware.append(
@@ -266,7 +282,7 @@ class OllamaDeepAgent:
             system_prompt=combined_prompt,
             middleware=middleware,
             backend=backend,
-            subagents=list(subagents) if subagents else None,
+            subagents=list(subagents) if subagents is not None else None,
             interrupt_on=interrupt_on,
             checkpointer=checkpointer,
             store=store,

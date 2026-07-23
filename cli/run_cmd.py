@@ -13,18 +13,57 @@ from cli.theme import ORANGE, PURPLE, GREEN, RED, DIM, LOGO
 console = Console()
 
 
+# System prompt injected into the single agent.
+# Tells it where the workspace is so it reads local files before answering.
+_AGENT_SYSTEM_PROMPT = """\
+You are a capable AI agent with full access to a local software project.
+
+## Your workspace
+{workspace}
+
+## Workflow
+
+For any question about the project:
+1. Call `get_directory_tree(".")` or `list_directory(".")` to orient yourself
+2. Read relevant files with `read_file` (README, pyproject.toml, source files)
+3. Answer based on what you actually read
+
+For tasks that require multiple agents or parallel work, you may use the `task`
+tool to spawn sub-agents. For simple file reads and writes, use the filesystem
+tools directly: `read_file`, `write_file`, `shell`, `grep`.
+
+Never guess or assume file contents — always read them first.
+"""
+
+# Injected at the top of the coordinator's system prompt.
+_COORDINATOR_WORKSPACE_PREFIX = """\
+## Your project workspace
+{workspace}
+
+Always explore the project using `get_directory_tree(".")` before planning.
+Call `get_directory_tree` with NO arguments or path="." to see the project layout.
+Never look outside this directory for project files.
+
+"""
+
+
 def run_agent_mode(cfg: CliConfig, initial_prompt: str | None) -> None:
     """Start OllamaDeepAgent in the full-screen TUI."""
     _ensure_storage(cfg)
 
-    from storage import SharedMemoryStore
     from agent import OllamaDeepAgent
     from tools.web_tools import WebConfig
 
     store = _open_store(cfg)
-
     agent_cfg = cfg.agent
-    workspace = Path(agent_cfg.workspace).resolve()
+    workspace = Path(agent_cfg.workspace)   # already absolute from config.py
+
+    ws_prompt = _AGENT_SYSTEM_PROMPT.format(workspace=workspace)
+    system_prompt = (
+        f"{agent_cfg.system_prompt}\n\n{ws_prompt}"
+        if agent_cfg.system_prompt
+        else ws_prompt
+    )
 
     agent = OllamaDeepAgent(
         model_name=cfg.model.name,
@@ -34,14 +73,20 @@ def run_agent_mode(cfg: CliConfig, initial_prompt: str | None) -> None:
         workspace_dir=workspace,
         memory_store=store,
         name=agent_cfg.name,
-        system_prompt=agent_cfg.system_prompt,
-        require_permission=False,   # TUI handles all interaction — no HITL stdin
+        system_prompt=system_prompt,
+        require_permission=False,
         persistent_memory=True,
         web_config=WebConfig.from_dict(cfg.web),
         debug=cfg.debug,
     )
 
-    _launch_tui(agent, mode="agent", model=cfg.model.name, initial_prompt=initial_prompt)
+    _launch_tui(
+        agent,
+        mode="agent",
+        model=cfg.model.name,
+        workspace=workspace,
+        initial_prompt=initial_prompt,
+    )
 
 
 def run_researcher_mode(cfg: CliConfig, initial_prompt: str | None) -> None:
@@ -49,7 +94,6 @@ def run_researcher_mode(cfg: CliConfig, initial_prompt: str | None) -> None:
     _ensure_storage(cfg)
 
     from coordinator import Coordinator
-    from cli.config import ConfigError
     from tools.web_tools import WebConfig
 
     try:
@@ -59,14 +103,15 @@ def run_researcher_mode(cfg: CliConfig, initial_prompt: str | None) -> None:
             f"researcher section of agent_config.yml is incomplete:\n{exc}\n\n"
             f"Run  [bold {ORANGE}]agentx init[/bold {ORANGE}]  to create a valid template."
         )
-        return  # unreachable — _die exits
+        return
 
     store = _open_store(cfg)
-    workspace = Path(cfg.researcher.workspace).resolve()
+    workspace = Path(cfg.researcher.workspace)   # already absolute from config.py
 
     coordinator = Coordinator(
         coordinator_config=coord_cfg,
         workspace_dir=workspace,
+        workspace_prompt_prefix=_COORDINATOR_WORKSPACE_PREFIX.format(workspace=workspace),
         storage_path=cfg.storage.path,
         memory_store=store,
         web_config=WebConfig.from_dict(cfg.web),
@@ -77,6 +122,7 @@ def run_researcher_mode(cfg: CliConfig, initial_prompt: str | None) -> None:
         coordinator,
         mode="researcher",
         model=cfg.model.name,
+        workspace=workspace,
         initial_prompt=initial_prompt,
         specialist_names=[spec.name for spec in coord_cfg.agents],
     )
@@ -85,7 +131,6 @@ def run_researcher_mode(cfg: CliConfig, initial_prompt: str | None) -> None:
 # ── Shared helpers ─────────────────────────────────────────────────────────────
 
 def _ensure_storage(cfg: CliConfig) -> None:
-    """Bootstrap LanceDB tables (silent if already exists)."""
     try:
         from storage.schema import bootstrap_tables
         bootstrap_tables(cfg.storage.path)
@@ -97,7 +142,6 @@ def _ensure_storage(cfg: CliConfig) -> None:
 
 
 def _open_store(cfg: CliConfig):
-    """Return a SharedMemoryStore or None on failure."""
     try:
         from storage import SharedMemoryStore
         return SharedMemoryStore(
@@ -115,6 +159,7 @@ def _launch_tui(
     *,
     mode: str,
     model: str,
+    workspace: Path,
     initial_prompt: str | None,
     specialist_names: list[str] | None = None,
 ) -> None:
@@ -123,6 +168,7 @@ def _launch_tui(
         runner=runner,
         mode=mode,
         model=model,
+        workspace=workspace,
         initial_prompt=initial_prompt,
         specialist_names=specialist_names or [],
     )
