@@ -13,57 +13,12 @@ from cli.theme import ORANGE, PURPLE, GREEN, RED, DIM, LOGO
 console = Console()
 
 
-# System prompt injected into the single agent.
+# Mode-specific context for agent mode.
+# Core tool guidance (write_todos, heredoc rewrite rule, absolute paths, etc.) is
+# injected automatically by _build_system_prompt in agent/core.py for ALL agent types.
 _AGENT_SYSTEM_PROMPT = """\
 You are a precise, capable AI agent operating inside a local software project.
 Be concise — match response length to the task. No filler phrases.
-
-## Workspace
-{workspace}
-
-All file paths must be ABSOLUTE. Always prefix paths with the workspace above.
-Example: write_file(file_path="{workspace}/README.md", content="...")
-
-## Built-in tools (from deepagents)
-
-**Shell:**
-  execute(command="pwd")                    — run any shell command
-  execute(command="git status")
-  execute(command="grep -r 'foo' .")
-
-**Files** (use absolute paths):
-  ls(path="{workspace}")                    — list a directory
-  read_file(file_path="{workspace}/foo.py") — read a file
-  write_file(file_path="...", content="...") — create a NEW file (errors if it exists)
-  edit_file(file_path="...", old_string="...", new_string="...") — modify existing file
-  glob(pattern="**/*.py", path="{workspace}") — find files by pattern
-  grep(pattern="def foo", path="{workspace}") — search file contents
-
-**Memory scratchpad** (in-memory only — does NOT touch any file on disk):
-  save_note(key, value)   — remember something
-  recall_note(key)        — retrieve a note
-
-## Decision rules
-
-| Request                          | Tool                                      |
-|----------------------------------|-------------------------------------------|
-| run a shell command              | execute(command="...")                    |
-| list files                       | ls(path="{workspace}")                    |
-| read a file                      | read_file(file_path="<abs_path>")         |
-| create a new file                | write_file(file_path="<abs_path>", ...)   |
-| edit an existing file            | read_file → edit_file (never write_file)  |
-| find files by pattern            | glob(pattern="...", path="{workspace}")   |
-| search inside files              | grep(pattern="...", path="{workspace}")   |
-| git status / history             | execute(command="git status") or get_git_status() |
-| python version / OS / env vars   | execute(command="python3 --version") etc. |
-
-## Rules
-
-- **write_file only creates new files.** If the file exists, it will fail — use edit_file instead.
-- **Always use absolute paths.** Prefix every file_path with the workspace path above.
-- **save_note ≠ write_file.** save_note is an in-memory scratchpad, it does NOT create files.
-- **execute() runs with workspace as cwd.** No need to cd first.
-- **Never invent file contents** — always read_file before editing.
 """
 
 # Injected at the top of the coordinator's system prompt.
@@ -89,11 +44,10 @@ def run_agent_mode(cfg: CliConfig, initial_prompt: str | None) -> None:
     agent_cfg = cfg.agent
     workspace = Path(agent_cfg.workspace)   # already absolute from config.py
 
-    ws_prompt = _AGENT_SYSTEM_PROMPT.format(workspace=workspace)
     system_prompt = (
-        f"{agent_cfg.system_prompt}\n\n{ws_prompt}"
+        f"{agent_cfg.system_prompt}\n\n{_AGENT_SYSTEM_PROMPT}"
         if agent_cfg.system_prompt
-        else ws_prompt
+        else _AGENT_SYSTEM_PROMPT
     )
 
     agent = OllamaDeepAgent(

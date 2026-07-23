@@ -70,11 +70,6 @@ _FOOTER_BUSY = (
     "Ctrl+N: new thread  ·  Ctrl+C: quit  "
 )
 
-# Conversation turns kept in context for the next message
-_MAX_HISTORY_TURNS = 6
-# Max chars per assistant response stored in history (avoids exploding context)
-_MAX_RESP_IN_HISTORY = 600
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -134,8 +129,6 @@ class AgentTUI(App):
         self._specialist_names: list[str]  = specialist_names or []
         self._active_tools: dict[str, int] = {}
         self._stop_event: threading.Event | None = None
-        # Conversation history: (user_message, assistant_response)
-        self._history: list[tuple[str, str]] = []
 
     def compose(self) -> ComposeResult:
         yield Static(self._header_text(), id="header")
@@ -235,7 +228,6 @@ class AgentTUI(App):
     def action_new_thread(self) -> None:
         self._thread_id = str(uuid.uuid4())
         self._thread_num += 1
-        self._history.clear()
         self._log().write("")
         self._log().write(
             f"[{_OK_STYLE}]✓ New thread #{self._thread_num} started[/{_OK_STYLE}]"
@@ -251,24 +243,6 @@ class AgentTUI(App):
         self._log().write(
             f"[{_DIM_STYLE}]  ◎  Stop requested — finishing current action…[/{_DIM_STYLE}]"
         )
-
-    # ── Conversation context ───────────────────────────────────────────────────
-
-    def _build_task_with_context(self, task: str) -> str:
-        """Prepend recent conversation history so the model has full context."""
-        if not self._history:
-            return task
-        turns = self._history[-_MAX_HISTORY_TURNS:]
-        lines = ["## Conversation so far\n"]
-        for user_msg, asst_resp in turns:
-            resp_preview = asst_resp.strip()
-            if len(resp_preview) > _MAX_RESP_IN_HISTORY:
-                resp_preview = resp_preview[:_MAX_RESP_IN_HISTORY] + "…"
-            lines.append(f"**User:** {user_msg}")
-            lines.append(f"**Assistant:** {resp_preview}")
-            lines.append("")
-        lines.append(f"## Current message\n\n{task}")
-        return "\n".join(lines)
 
     # ── Submit ─────────────────────────────────────────────────────────────────
 
@@ -305,7 +279,6 @@ class AgentTUI(App):
         # after a full paragraph accumulates.
         para_buf: list[str] = []
         in_code_fence = [False]
-        full_resp_buf: list[str] = []   # accumulates all response text for history
 
         def _flush_para() -> None:
             text = "".join(para_buf).strip()
@@ -337,7 +310,6 @@ class AgentTUI(App):
         after_tool   = [False]
 
         def _emit_resp(text: str) -> None:
-            full_resp_buf.append(text)
             parts = text.split("\n")
             for i, part in enumerate(parts):
                 resp_line[0] += part
@@ -420,10 +392,11 @@ class AgentTUI(App):
             self.call_from_thread(live.update, "")
 
         # ── Event loop ─────────────────────────────────────────────────────────
-        full_task = self._build_task_with_context(task)
+        # Conversation memory is handled natively by LangGraph's MemorySaver
+        # via thread_id — no manual history injection needed.
         try:
             for event in self._runner.stream_events(
-                full_task, thread_id=self._thread_id, auto_approve=True
+                task, thread_id=self._thread_id, auto_approve=True
             ):
                 if stop and stop.is_set():
                     break
@@ -504,13 +477,6 @@ class AgentTUI(App):
                     f"[{_DIM_STYLE}]  ◎  Stopped.[/{_DIM_STYLE}]",
                 )
             self.call_from_thread(log.write, "")
-
-            # Commit this turn to conversation history (skip stopped runs)
-            full_resp = "".join(full_resp_buf).strip()
-            if full_resp and not stopped:
-                self._history.append((task, full_resp))
-                if len(self._history) > _MAX_HISTORY_TURNS:
-                    self._history = self._history[-_MAX_HISTORY_TURNS:]
 
             self._tool_wait = False
             self._active_tools.clear()

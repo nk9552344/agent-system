@@ -20,7 +20,7 @@ class ModelConfig:
     name: str
     base_url: str = "http://localhost:11434"
     temperature: float = 0.0
-    context_window: int = 8192
+    context_window: int = 32768
 
 
 @dataclass

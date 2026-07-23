@@ -29,6 +29,7 @@ from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import BaseMessage, SystemMessage, trim_messages
 from langchain_core.tools import BaseTool
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -49,14 +50,92 @@ from agent.config import AgentConfig
 from storage.memory_store import SharedMemoryStore
 from tools import WebConfig, make_all_tools
 
-# Appended to every agent's system prompt to reduce hallucination.
-_ACCURACY_SUFFIX = """
+def _char_token_count(messages: list[BaseMessage]) -> int:
+    """Rough token estimator: ~4 chars per token."""
+    return sum(len(str(getattr(m, "content", ""))) // 4 for m in messages)
+
+
+class _TrimmedChatOllama(ChatOllama):
+    """ChatOllama that keeps the model loaded and auto-trims messages to fit the context window."""
+
+    max_input_tokens: int = 24576  # ~75% of context window for input
+
+    def _trim(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+        return trim_messages(
+            messages,
+            max_tokens=self.max_input_tokens,
+            strategy="last",
+            token_counter=_char_token_count,
+            include_system=True,
+            allow_partial=False,
+            start_on="human",
+        )
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        return super()._generate(self._trim(messages), stop, run_manager, **kwargs)
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        yield from super()._stream(self._trim(messages), stop, run_manager, **kwargs)
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        return await super()._agenerate(self._trim(messages), stop, run_manager, **kwargs)
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        async for chunk in super()._astream(self._trim(messages), stop, run_manager, **kwargs):
+            yield chunk
+
+
+# Injected into every agent's system prompt (workspace-aware).
+_TOOL_GUIDANCE_TEMPLATE = """\
+## Workspace: {workspace}
+
+All file paths must be ABSOLUTE. Prepend {workspace} to any relative path.
+
+## Tools
+
+**Shell:**
+  execute(command="git status")   — any command; cwd = workspace
+
+**Files** (absolute paths only):
+  ls(path="{workspace}")
+  read_file(file_path="/abs/path/file")
+  write_file(file_path="/abs/path", content="...")     — NEW files only (fails if exists)
+  edit_file(file_path="/abs/path", old_string="a", new_string="b")  — small edits only
+  glob(pattern="**/*.py", path="{workspace}")
+  grep(pattern="def foo", path="{workspace}")
+
+**Task planning (write_todos):**
+  For any task with 3+ steps, call write_todos first to plan.
+  Mark each step "in_progress" before starting, "completed" immediately after.
+  Do NOT stop until all todos are marked completed.
+
+**Memory scratchpad** (in-memory only, does NOT write to disk):
+  save_note(key, value) / recall_note(key)
+
+## Critical rules
+
+1. **Large file rewrites → shell heredoc.** Never use edit_file with a large old_string —
+   the JSON will be truncated by Ollama and fail to parse. For rewrites or new content >20 lines,
+   write the file via execute:
+
+   execute(command="cat << 'HEREDOC' > /abs/path/file.md
+...all new content here...
+HEREDOC")
+
+2. **edit_file → small patches only.** Use it ONLY for targeted replacements of a few lines.
+   For anything larger, use the heredoc approach above.
+
+3. **write_file → new files only.** Use heredoc or edit_file for files that already exist.
+
+4. **save_note ≠ file write.** save_note stores in memory, nothing on disk."""
+
+# Appended after tool guidance on every agent's system prompt.
+_ACCURACY_SUFFIX = """\
 
 ## Accuracy
 
 - Never invent file contents, paths, or command output — always use a tool to verify.
-- If a task cannot be completed as described, say why precisely instead of partially faking it.
-"""
+- If a task cannot be completed as described, say why precisely instead of partially faking it."""
 
 
 class OllamaDeepAgent:
@@ -165,11 +244,15 @@ class OllamaDeepAgent:
             )
 
         # --- Model ----------------------------------------------------------------
-        model = ChatOllama(
+        # keep_alive=-1: model stays loaded in Ollama for the lifetime of this process.
+        # max_input_tokens: auto-trim messages to ~75% of context window before each call.
+        model = _TrimmedChatOllama(
             model=model_name,
             base_url=base_url,
             temperature=temperature,
             num_ctx=num_ctx,
+            keep_alive=-1,
+            max_input_tokens=max(1024, int(num_ctx * 0.75)),
         )
 
         # --- Backend --------------------------------------------------------------
@@ -249,7 +332,7 @@ class OllamaDeepAgent:
         all_tools: list[BaseTool | Callable] = [*custom_tools, *(extra_tools or [])]
 
         # --- System prompt --------------------------------------------------------
-        combined_prompt = _build_system_prompt(system_prompt)
+        combined_prompt = _build_system_prompt(system_prompt, workspace=workspace)
 
         # --- Assemble graph -------------------------------------------------------
         self._graph: CompiledStateGraph = create_deep_agent(
@@ -613,11 +696,15 @@ class OllamaDeepAgent:
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
-def _build_system_prompt(user_prefix: str | None) -> str:
-    """Combine user-supplied prefix with the accuracy suffix."""
+def _build_system_prompt(user_prefix: str | None, *, workspace: str | Path) -> str:
+    """Combine user-supplied prefix, workspace tool guidance, and accuracy suffix.
+
+    Injected into every OllamaDeepAgent regardless of mode (agent, specialist, researcher).
+    """
     parts: list[str] = []
     if user_prefix:
         parts.append(user_prefix.strip())
+    parts.append(_TOOL_GUIDANCE_TEMPLATE.format(workspace=workspace))
     parts.append(_ACCURACY_SUFFIX.strip())
     return "\n\n".join(parts)
 
