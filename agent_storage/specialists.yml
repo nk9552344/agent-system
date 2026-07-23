@@ -1,0 +1,45 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  AgentX — Specialist Roster  (researcher mode)
+#  Edit to add/remove specialists or point to different Ollama models.
+#  The coordinator reads 'description' and 'expertise' to route subtasks.
+# ══════════════════════════════════════════════════════════════════════════════
+
+coordinator:
+  model: "qwen2.5-coder:7b"        # reasoning model for task decomposition
+  base_url: "http://localhost:11434"
+  temperature: 0
+  num_ctx: 16384                    # larger context for the coordinator
+
+agents:
+  - name: "coder"
+    model: "qwen2.5-coder:7b"
+    base_url: "http://localhost:11434"
+    temperature: 0
+    num_ctx: 8192
+    expertise:
+      - python
+      - typescript
+      - code generation
+      - debugging
+      - testing
+      - refactoring
+    description: >
+      Expert software developer. Delegate here for: writing new code, fixing
+      bugs, adding tests, refactoring, and any implementation work.
+      Works autonomously using file tools and a shell.
+
+  - name: "reviewer"
+    model: "qwen2.5-coder:7b"
+    base_url: "http://localhost:11434"
+    temperature: 0
+    num_ctx: 8192
+    expertise:
+      - code review
+      - quality assurance
+      - security
+      - performance
+      - documentation
+    description: >
+      Code reviewer and quality specialist. Delegate here for: reviewing code
+      for bugs or security issues, writing tests, checking performance, and
+      producing clear documentation or README files.
