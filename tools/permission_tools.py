@@ -16,15 +16,7 @@ def make_permission_tools() -> list[BaseTool]:
 
     @tool
     def ask_user(question: str) -> str:
-        """Ask the human user a question and wait for their response.
-
-        Use before taking any action that is irreversible, ambiguous, or that
-        the user hasn't explicitly requested. Also use when you need input that
-        only the user can provide (credentials, preferences, clarification).
-
-        Args:
-            question: The question to ask. Be specific about what you need and why.
-        """
+        """Ask the user a question and return their text response."""
         print(f"\n[Agent]: {question}")
         try:
             response = input("You: ").strip()
@@ -34,14 +26,7 @@ def make_permission_tools() -> list[BaseTool]:
 
     @tool
     def request_confirmation(action_description: str) -> str:
-        """Ask the user to confirm a specific action before executing it.
-
-        Returns 'confirmed' or 'rejected'. Use for destructive or high-impact
-        operations before performing them.
-
-        Args:
-            action_description: Clear one-line description of what you're about to do.
-        """
+        """Ask the user to confirm an action. Returns 'confirmed' or 'rejected'."""
         print(f"\n[Agent wants to]: {action_description}")
         try:
             response = input("Confirm? [y/n]: ").strip().lower()
@@ -54,12 +39,7 @@ def make_permission_tools() -> list[BaseTool]:
 
     @tool
     def choose_option(question: str, options: list[str]) -> str:
-        """Present numbered options to the user and return their choice.
-
-        Args:
-            question: What to decide.
-            options: List of choices (2–8 items).
-        """
+        """Present numbered choices to the user and return their selection."""
         if not options:
             return "No options provided."
 

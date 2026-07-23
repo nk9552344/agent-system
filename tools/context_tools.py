@@ -20,13 +20,7 @@ def make_context_tools(workspace_dir: Path) -> list[BaseTool]:
 
     @tool
     def get_env_info() -> str:
-        """Return a summary of the current runtime environment.
-
-        Includes OS, Python version, CPU/memory, current directory, and key
-        environment variables. Call this at the start of any task that depends
-        on the environment (running code, installing packages, etc.) to avoid
-        making wrong assumptions.
-        """
+        """Return OS, Python version, workspace path, and available package managers."""
         info: dict[str, str] = {
             "os": f"{platform.system()} {platform.release()} ({platform.machine()})",
             "python": sys.version.split()[0],
@@ -53,12 +47,7 @@ def make_context_tools(workspace_dir: Path) -> list[BaseTool]:
 
     @tool
     def get_installed_packages(filter_prefix: str = "") -> str:
-        """List installed Python packages, optionally filtered by name prefix.
-
-        Args:
-            filter_prefix: Only show packages starting with this string (e.g. 'lang').
-                           Leave empty to list all packages.
-        """
+        """List installed Python packages, optionally filtered by name prefix."""
         result = subprocess.run(
             [sys.executable, "-m", "pip", "list", "--format=columns"],
             capture_output=True,
@@ -82,14 +71,7 @@ def make_context_tools(workspace_dir: Path) -> list[BaseTool]:
 
     @tool
     def verify_import(module_name: str) -> str:
-        """Verify that a Python module can be imported without running it.
-
-        Use before assuming a library is available to avoid hallucinating that
-        a package is installed when it isn't.
-
-        Args:
-            module_name: Module to import (e.g. 'langchain', 'numpy', 'fastapi').
-        """
+        """Check if a Python module can be imported (confirms it is installed)."""
         result = subprocess.run(
             [sys.executable, "-c", f"import {module_name}; print('ok')"],
             capture_output=True,
@@ -102,10 +84,7 @@ def make_context_tools(workspace_dir: Path) -> list[BaseTool]:
 
     @tool
     def get_git_status() -> str:
-        """Return the current git status of the workspace.
-
-        Shows branch, staged/unstaged changes, and recent commits.
-        """
+        """Return git branch, staged/unstaged changes, and recent commits."""
         def run_git(*args: str) -> str:
             result = subprocess.run(
                 ["git", *args],

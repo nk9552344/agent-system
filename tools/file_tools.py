@@ -23,12 +23,7 @@ def make_file_tools(workspace_dir: Path) -> list[BaseTool]:
 
     @tool
     def write_file(path: str, content: str = "") -> str:
-        """Create or overwrite a file with the given text content.
-
-        Args:
-            path: File path relative to workspace (e.g. 'src/main.py', 'test.txt').
-            content: Text to write. Pass an empty string to create an empty file.
-        """
+        """Create or overwrite a file on disk (path relative to workspace)."""
         target = _resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
@@ -36,13 +31,7 @@ def make_file_tools(workspace_dir: Path) -> list[BaseTool]:
 
     @tool
     def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> str:
-        """Read a file and return its text content.
-
-        Args:
-            path: File path relative to workspace.
-            start_line: First line to return (1-indexed, default 1).
-            end_line: Last line to return inclusive. Omit to read the whole file.
-        """
+        """Read a file and return its text (optionally a line range)."""
         target = _resolve(path)
         if not target.exists():
             return f"File not found: {path}"
@@ -63,14 +52,7 @@ def make_file_tools(workspace_dir: Path) -> list[BaseTool]:
         new_string: str,
         replace_all: bool = False,
     ) -> str:
-        """Edit a file by replacing a specific string.
-
-        Args:
-            path: File path relative to workspace.
-            old_string: Exact text to find and replace (must exist in the file).
-            new_string: Replacement text.
-            replace_all: Replace every occurrence if True (default False).
-        """
+        """Replace old_string with new_string in a file (old_string must exist exactly)."""
         target = _resolve(path)
         if not target.exists():
             return f"File not found: {path}"
@@ -94,11 +76,7 @@ def make_file_tools(workspace_dir: Path) -> list[BaseTool]:
 
     @tool
     def list_directory(path: str = ".") -> str:
-        """List files and directories inside a directory.
-
-        Args:
-            path: Directory path relative to workspace (default: workspace root).
-        """
+        """List files and subdirectories at a path (default: workspace root)."""
         target = _resolve(path)
         if not target.exists():
             return f"Path does not exist: {path}"
@@ -121,13 +99,7 @@ def make_file_tools(workspace_dir: Path) -> list[BaseTool]:
         max_depth: int = 3,
         show_hidden: bool = False,
     ) -> str:
-        """Return a recursive tree view of a directory.
-
-        Args:
-            path: Directory path relative to workspace (default: workspace root).
-            max_depth: Maximum recursion depth (default 3).
-            show_hidden: Include dot-files and dot-dirs (default False).
-        """
+        """Show a recursive tree of the directory structure."""
         target = _resolve(path)
         if not target.exists():
             return f"Path does not exist: {path}"
@@ -161,13 +133,7 @@ def make_file_tools(workspace_dir: Path) -> list[BaseTool]:
         search_dir: str = ".",
         max_results: int = 50,
     ) -> str:
-        """Find files matching a glob pattern.
-
-        Args:
-            pattern: Glob pattern e.g. '*.py', '**/*.json', 'src/*.ts'.
-            search_dir: Directory to search (relative to workspace, default '.').
-            max_results: Maximum results to return.
-        """
+        """Find files by glob pattern (e.g. '**/*.py', 'src/*.ts')."""
         target = _resolve(search_dir)
         if not target.exists():
             return f"Directory not found: {search_dir}"
@@ -183,12 +149,7 @@ def make_file_tools(workspace_dir: Path) -> list[BaseTool]:
 
     @tool
     def diff_files(file_a: str, file_b: str) -> str:
-        """Show a unified diff between two text files.
-
-        Args:
-            file_a: First file (relative to workspace or absolute).
-            file_b: Second file (relative to workspace or absolute).
-        """
+        """Show a unified diff between two files."""
         path_a, path_b = _resolve(file_a), _resolve(file_b)
         for p, name in [(path_a, file_a), (path_b, file_b)]:
             if not p.exists():

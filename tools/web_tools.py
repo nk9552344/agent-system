@@ -708,17 +708,7 @@ def make_web_tools(
     # ──────────────────────────────────────────────────────────────────────
     @tool
     def web_search(query: str, max_results: int = 6) -> str:
-        """Search the web for articles, GitHub repos, documentation, or research papers.
-
-        Returns titles, URLs, and snippets. Use the results to decide which URLs
-        to ingest with fetch_and_store_url.
-
-        Install ``duckduckgo-search`` for much better results (uv add duckduckgo-search).
-
-        Args:
-            query:       Natural-language search query.
-            max_results: Results to return (default 6, max 10).
-        """
+        """Search the web via DuckDuckGo and return titles, URLs, and snippets."""
         max_results = min(max_results, 10)
         try:
             results = _ddg_search(query, max_results)
@@ -737,16 +727,7 @@ def make_web_tools(
     # ──────────────────────────────────────────────────────────────────────
     @tool
     def github_search(query: str, search_type: str = "repositories", max_results: int = 6) -> str:
-        """Search GitHub for repositories or code files.
-
-        Set a GitHub token in config.yml (web.github_token) or the GITHUB_TOKEN
-        environment variable to raise the API rate limit from 60 to 5 000 req/hr.
-
-        Args:
-            query:       Search terms (e.g. 'FastAPI CRUD SQLite stars:>500').
-            search_type: 'repositories' (default) or 'code'.
-            max_results: Results to return (default 6, max 10).
-        """
+        """Search GitHub for repositories or code. search_type: 'repositories' or 'code'."""
         max_results = min(max_results, 10)
         try:
             if search_type == "code":
@@ -779,25 +760,7 @@ def make_web_tools(
     # ──────────────────────────────────────────────────────────────────────
     @tool
     def fetch_and_store_url(url: str, description: str = "") -> str:
-        """Fetch ANY URL and store its parsed content in the shared RAG memory.
-
-        Automatically handles:
-        • GitHub repos     — README + recursive file tree + repo metadata
-        • GitHub files     — raw source (blob / tree / raw / raw.githubusercontent.com)
-        • PDFs             — full text (needs pypdf, pdfminer.six, or pdftotext CLI)
-        • arXiv papers     — abstract + full text extracted from PDF
-        • HTML pages       — content extraction (strips nav / ads / scripts)
-        • Documentation    — readthedocs, GitHub Pages, official docs
-        • Plain text / JSON / XML — stored as-is
-        • REST API URLs    — raw response stored for reference
-
-        Large documents are chunked automatically so every section is
-        independently searchable. Content is visible to all agents instantly.
-
-        Args:
-            url:         Full URL to fetch (http or https).
-            description: Why this resource matters — stored as context alongside the content.
-        """
+        """Fetch a URL (webpage, GitHub repo, PDF, arXiv paper) and store it in RAG memory."""
         try:
             source_type, content = _fetch_url_content(url, cfg)
         except urllib.error.HTTPError as exc:
@@ -835,20 +798,7 @@ def make_web_tools(
         store_response: bool = False,
         description: str = "",
     ) -> str:
-        """Make a raw HTTP request (like curl) and return the response.
-
-        Use for REST APIs, webhooks, or any endpoint requiring custom headers
-        or a request body. Optionally stores the response in shared memory.
-
-        Args:
-            method:         HTTP verb — GET, POST, PUT, PATCH, DELETE, HEAD.
-            url:            Full URL including query string.
-            headers_json:   JSON object of extra request headers (default '{}').
-                            E.g. '{"Authorization": "Bearer TOKEN", "Content-Type": "application/json"}'
-            body:           Request body string (for POST / PUT).
-            store_response: If True, saves the response to shared RAG memory.
-            description:    Label used when store_response is True.
-        """
+        """Make a raw HTTP request and return the response. method: GET/POST/PUT/PATCH/DELETE. headers_json: JSON string of extra headers."""
         try:
             extra = json.loads(headers_json) if headers_json.strip() else {}
         except json.JSONDecodeError as exc:
@@ -894,17 +844,7 @@ def make_web_tools(
     # ──────────────────────────────────────────────────────────────────────
     @tool
     def search_web_resources(query: str, limit: int = 5, source_type: str = "") -> str:
-        """Semantic search over all web content ingested by any agent.
-
-        Always check this BEFORE fetching a new URL — the content may already
-        be in shared memory from another agent. All agents share one store.
-
-        Args:
-            query:       What you're looking for (natural language).
-            limit:       Max chunks to return (default 5).
-            source_type: Optional filter — 'pdf', 'github', 'arxiv', 'html', 'api', 'raw'.
-                         Leave empty to search all types.
-        """
+        """Semantic search over all previously fetched web content in RAG memory."""
         try:
             candidates = store.search_memories(f"WEB_RESOURCE {query}", limit=limit * 6)
             hits = [r for r in candidates if "web_resource" in (r.get("tags") or "")]
@@ -933,13 +873,7 @@ def make_web_tools(
     # ──────────────────────────────────────────────────────────────────────
     @tool
     def list_web_resources(limit: int = 40) -> str:
-        """List every URL fetched and stored by any agent in this session.
-
-        Check this before fetching to avoid duplicate work.
-
-        Args:
-            limit: Max entries to show (default 40).
-        """
+        """List all URLs that have been fetched and stored in memory."""
         try:
             notes = store.list_notes(prefix="web_resource:")
             if not notes:

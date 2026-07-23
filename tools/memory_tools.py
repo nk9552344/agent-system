@@ -29,16 +29,7 @@ def make_memory_tools(store: "SharedMemoryStore", agent_name: str = "", session_
 
     @tool
     def save_note(key: str, value: str) -> str:
-        """Save or overwrite a note in the shared database.
-
-        Notes are visible to ALL agents. Use for facts that should
-        persist across sessions and be accessible everywhere, e.g.
-        user preferences, project config, discovered API endpoints.
-
-        Args:
-            key: Unique identifier (e.g. 'user_email', 'db_host').
-            value: Content to remember.
-        """
+        """Save a key-value note to the in-memory store. Does NOT create or modify any file on disk."""
         try:
             store.save_note(key, value, agent_name=agent_name, session_id=session_id)
             return f"Saved note '{key}'."
@@ -47,13 +38,7 @@ def make_memory_tools(store: "SharedMemoryStore", agent_name: str = "", session_
 
     @tool
     def recall_note(key: str) -> str:
-        """Recall a note by exact key.
-
-        Returns the stored value or 'not found' if the key doesn't exist.
-
-        Args:
-            key: The exact key used when the note was saved.
-        """
+        """Retrieve a previously saved note by its exact key."""
         try:
             value = store.get_note(key)
             if value is not None:
@@ -66,16 +51,7 @@ def make_memory_tools(store: "SharedMemoryStore", agent_name: str = "", session_
 
     @tool
     def search_notes(query: str, limit: int = 5) -> str:
-        """Search notes by meaning, not just exact key.
-
-        Useful when you don't remember the exact key but know what
-        you're looking for. Uses vector search when available, falls
-        back to text matching.
-
-        Args:
-            query: What you're looking for (natural language).
-            limit: Max number of results to return.
-        """
+        """Search saved notes by semantic similarity or keyword."""
         try:
             results = store.search_notes(query, limit=limit)
             if not results:
@@ -87,13 +63,7 @@ def make_memory_tools(store: "SharedMemoryStore", agent_name: str = "", session_
 
     @tool
     def list_notes(prefix: str = "") -> str:
-        """List all saved notes, optionally filtered by key prefix.
-
-        Args:
-            prefix: Only show notes whose key starts with this
-                    (e.g. 'user_' shows 'user_email', 'user_name', ...).
-                    Leave empty to list everything.
-        """
+        """List all saved notes, optionally filtered by key prefix."""
         try:
             notes = store.list_notes(prefix=prefix)
             if not notes:
@@ -106,13 +76,7 @@ def make_memory_tools(store: "SharedMemoryStore", agent_name: str = "", session_
 
     @tool
     def delete_note(key: str) -> str:
-        """Delete a note from the shared store.
-
-        This affects all agents — only delete notes that are no longer needed.
-
-        Args:
-            key: The exact key to delete.
-        """
+        """Delete a saved note by key."""
         try:
             deleted = store.delete_note(key)
             return f"Deleted note '{key}'." if deleted else f"No note found for '{key}'."
@@ -123,17 +87,7 @@ def make_memory_tools(store: "SharedMemoryStore", agent_name: str = "", session_
 
     @tool
     def add_memory(content: str, tags: str = "") -> str:
-        """Save a new memory observation to the shared store.
-
-        Use for free-form things you learn: user feedback, discovered
-        patterns, errors encountered, decisions made. Memories support
-        semantic (similarity) search so you can retrieve relevant ones
-        even without knowing exact keywords.
-
-        Args:
-            content: What you want to remember (plain text).
-            tags: Optional comma-separated labels (e.g. 'python,bug,auth').
-        """
+        """Save a free-form observation to long-term memory (searchable later)."""
         try:
             tag_list = [t.strip() for t in tags.split(",") if t.strip()]
             mem_id = store.add_memory(
@@ -148,17 +102,7 @@ def make_memory_tools(store: "SharedMemoryStore", agent_name: str = "", session_
 
     @tool
     def search_memories(query: str, limit: int = 5, filter_own: bool = False) -> str:
-        """Search past memories by semantic similarity.
-
-        Returns the most relevant memories across all agents (or just
-        yours if filter_own=True). Useful before starting a task to
-        recall relevant past context.
-
-        Args:
-            query: What you want to recall (natural language).
-            limit: Number of results (default 5, max 20).
-            filter_own: If True, only return memories from this agent.
-        """
+        """Search past memory observations by semantic similarity."""
         try:
             limit = min(limit, 20)
             agent_filter = agent_name if filter_own and agent_name else None
@@ -178,12 +122,7 @@ def make_memory_tools(store: "SharedMemoryStore", agent_name: str = "", session_
 
     @tool
     def list_memories(limit: int = 10, filter_own: bool = False) -> str:
-        """List recent memories, newest first.
-
-        Args:
-            limit: How many to show (default 10, max 50).
-            filter_own: If True, only show this agent's memories.
-        """
+        """List recent memory observations, newest first."""
         try:
             limit = min(limit, 50)
             agent_filter = agent_name if filter_own and agent_name else None
