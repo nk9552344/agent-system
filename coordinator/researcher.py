@@ -44,7 +44,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from agent.core import OllamaDeepAgent
-from coordinator.config import AgentSpec, load_config
+from coordinator.config import AgentSpec, CoordinatorConfig, from_agent_config, load_config
 from coordinator.git_worktree import WorktreeManager
 from deepagents import CompiledSubAgent
 from storage.memory_store import SharedMemoryStore
@@ -235,11 +235,13 @@ class AutoResearcher:
         self,
         workspace_dir: str | Path,
         user_tools_path: str | Path,
-        config_path: str | Path = "coordinator/config.yml",
+        coordinator_config: CoordinatorConfig | None = None,
         storage_path: str | Path = "data/lancedb",
         memory_store: SharedMemoryStore | None = None,
         web_config: WebConfig | None = None,
         debug: bool = False,
+        *,
+        config_path: str | Path | None = None,  # legacy — use coordinator_config instead
     ) -> None:
         self._workspace = Path(workspace_dir).resolve()
         self._debug = debug
@@ -254,8 +256,15 @@ class AutoResearcher:
         # Load user-defined hooks
         self._eval_fn, self._save_fn = _load_user_tools(Path(user_tools_path))
 
-        # Load coordinator config (model roster)
-        cfg = load_config(config_path)
+        # Resolve coordinator config
+        if coordinator_config is not None:
+            cfg = coordinator_config
+        elif config_path is not None:
+            cfg = load_config(config_path)
+        else:
+            raise ValueError(
+                "AutoResearcher requires either coordinator_config= or config_path=."
+            )
 
         # Shared memory store
         self._store = memory_store or SharedMemoryStore(

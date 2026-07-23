@@ -46,7 +46,7 @@ class CoordinatorConfig:
         return next((a for a in self.agents if a.name == name), None)
 
 
-def load_config(path: str | Path = "coordinator/config.yml") -> CoordinatorConfig:
+def load_config(path: str | Path = "coordinator/config.yml") -> CoordinatorConfig:  # kept for legacy use
     """Parse config.yml and return a CoordinatorConfig.
 
     Args:
@@ -94,5 +94,61 @@ def load_config(path: str | Path = "coordinator/config.yml") -> CoordinatorConfi
 
     if not agents:
         raise ValueError("config.yml: at least one agent must be defined under 'agents'.")
+
+    return CoordinatorConfig(coordinator=coordinator, agents=agents)
+
+
+def from_agent_config(researcher_section: dict) -> CoordinatorConfig:
+    """Build a CoordinatorConfig from the ``researcher:`` section of agent_config.yml.
+
+    Expected shape::
+
+        researcher:
+          coordinator:
+            model: qwen2.5-coder:7b
+            base_url: http://localhost:11434
+            temperature: 0
+            context_window: 16384
+          specialists:
+            - name: coder
+              model: qwen2.5-coder:7b
+              ...
+    """
+    coord_raw = researcher_section.get("coordinator", {})
+    if not coord_raw.get("model"):
+        raise ValueError(
+            "agent_config.yml: researcher.coordinator.model is required."
+        )
+
+    coordinator = CoordinatorSpec(
+        model=coord_raw["model"],
+        base_url=coord_raw.get("base_url", "http://localhost:11434"),
+        temperature=float(coord_raw.get("temperature", 0.0)),
+        # accept both context_window (new key) and num_ctx (old key)
+        num_ctx=int(coord_raw.get("context_window", coord_raw.get("num_ctx", 16384))),
+    )
+
+    agents: list[AgentSpec] = []
+    for entry in researcher_section.get("specialists", []):
+        if not entry.get("name") or not entry.get("model"):
+            raise ValueError(
+                f"agent_config.yml: each specialist needs 'name' and 'model'. Got: {entry}"
+            )
+        agents.append(
+            AgentSpec(
+                name=entry["name"],
+                model=entry["model"],
+                description=entry.get("description", ""),
+                expertise=entry.get("expertise", []),
+                base_url=entry.get("base_url", "http://localhost:11434"),
+                temperature=float(entry.get("temperature", 0.0)),
+                num_ctx=int(entry.get("context_window", entry.get("num_ctx", 8192))),
+            )
+        )
+
+    if not agents:
+        raise ValueError(
+            "agent_config.yml: researcher.specialists must have at least one entry."
+        )
 
     return CoordinatorConfig(coordinator=coordinator, agents=agents)

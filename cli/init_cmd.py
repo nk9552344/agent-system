@@ -11,7 +11,6 @@ from cli.theme import ORANGE, PURPLE, VIOLET, GREEN, DIM, LOGO
 
 console = Console()
 
-# Template paths (relative to this file)
 _TEMPLATES = Path(__file__).parent / "templates"
 
 
@@ -28,49 +27,44 @@ def run_init(force: bool = False) -> None:
     ))
     console.print()
 
-    # ── agent_config.yml ────────────────────────────────────────────────────
+    # ── agent_config.yml ─────────────────────────────────────────────────────
     config_dst = cwd / "agent_config.yml"
     if config_dst.exists() and not force:
-        console.print(f"  [{DIM}]~[/{DIM}]  agent_config.yml already exists — skipping  "
-                      f"[{DIM}](use --force to overwrite)[/{DIM}]")
+        console.print(
+            f"  [{DIM}]~[/{DIM}]  agent_config.yml already exists — skipping  "
+            f"[{DIM}](use --force to overwrite)[/{DIM}]"
+        )
     else:
-        config_src = _TEMPLATES / "agent_config.yml"
-        config_dst.write_text(config_src.read_text(encoding="utf-8"), encoding="utf-8")
+        src = _TEMPLATES / "agent_config.yml"
+        config_dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
         _ok("agent_config.yml")
 
-    # ── agent_storage/ ──────────────────────────────────────────────────────
+    # ── agent_storage/ (lancedb created at runtime) ───────────────────────────
     storage_dir = cwd / "agent_storage"
     storage_dir.mkdir(exist_ok=True)
 
-    # .gitignore inside storage
     gi_dst = storage_dir / ".gitignore"
     if not gi_dst.exists():
         gi_src = _TEMPLATES / "storage_gitignore"
         gi_dst.write_text(gi_src.read_text(encoding="utf-8"), encoding="utf-8")
 
-    # specialists.yml
-    specialists_dst = storage_dir / "specialists.yml"
-    if specialists_dst.exists() and not force:
-        console.print(f"  [{DIM}]~[/{DIM}]  agent_storage/specialists.yml already exists — skipping")
-    else:
-        spec_src = _TEMPLATES / "specialists.yml"
-        specialists_dst.write_text(spec_src.read_text(encoding="utf-8"), encoding="utf-8")
-        _ok("agent_storage/specialists.yml")
+    _ok("agent_storage/  (directory ready — lancedb created on first run)")
 
-    _ok("agent_storage/  (directory ready)")
-
-    # ── Next steps ──────────────────────────────────────────────────────────
+    # ── Next steps ────────────────────────────────────────────────────────────
     console.print()
     steps = Text()
     steps.append("  Next steps\n\n", style=f"bold {VIOLET}")
+
     steps.append("  1. ", style=f"{DIM}")
     steps.append("Edit ", style="white")
     steps.append("agent_config.yml", style=f"bold {ORANGE}")
-    steps.append(" — set your Ollama model and workspace path\n", style="white")
+    steps.append("\n", style="white")
+    steps.append(f"     [{DIM}]Set your Ollama model, workspace, specialists, and GitHub token[/{DIM}]\n\n",
+                 style="white")
 
     steps.append("  2. ", style=f"{DIM}")
-    steps.append("For researcher mode, also edit ", style="white")
-    steps.append("agent_storage/specialists.yml", style=f"bold {ORANGE}")
+    steps.append("Pull required Ollama models  ", style="white")
+    steps.append("ollama pull nomic-embed-text", style=f"bold {ORANGE}")
     steps.append("\n\n", style="white")
 
     steps.append("  Run modes\n\n", style=f"bold {VIOLET}")

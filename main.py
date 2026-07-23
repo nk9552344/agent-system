@@ -24,6 +24,7 @@ from pathlib import Path
 
 import yaml
 
+from coordinator.config import from_agent_config
 from tools.web_tools import WebConfig
 
 # ─── ANSI colour helpers (no extra dep) ──────────────────────────────────────
@@ -62,11 +63,18 @@ def _print_response(text: str, label: str = "Agent") -> None:
 # ─── Config / prompt loading ──────────────────────────────────────────────────
 
 def _load_config(path: str) -> dict:
-    p = Path(path)
-    if not p.exists():
+    """Load agent_config.yml (preferred) or fall back to config.yml."""
+    # Prefer agent_config.yml (new single-file format)
+    preferred = Path(path)
+    if not preferred.exists() and path == "config.yml":
+        alt = Path("agent_config.yml")
+        if alt.exists():
+            preferred = alt
+    if not preferred.exists():
         _error(f"Config file not found: {path}")
+        _error("Run  agentx init  to create agent_config.yml in the current directory.")
         sys.exit(1)
-    with p.open() as f:
+    with preferred.open() as f:
         return yaml.safe_load(f) or {}
 
 def _load_prompt(path: str) -> str | None:
@@ -198,20 +206,27 @@ def run_agent(cfg: dict, task: str | None) -> None:
 # ─── Coordinator mode ─────────────────────────────────────────────────────────
 
 def run_coordinator(cfg: dict, task: str | None) -> None:
+    # Support both old (coordinator.config) and new (researcher section) formats
+    r = cfg.get("researcher", {})
     c = cfg.get("coordinator", {})
     s = cfg.get("storage", {})
 
-    config_path  = c.get("config", "coordinator/config.yml")
-    workspace    = c.get("workspace", ".")
+    workspace    = r.get("workspace") or c.get("workspace", ".")
     cleanup      = c.get("cleanup_worktrees", False)
-    storage_path = s.get("path", "data/lancedb")
+    storage_path = s.get("path", cfg.get("storage", {}).get("path", "data/lancedb"))
 
-    if not Path(config_path).exists():
-        _error(f"Coordinator config not found: {config_path}")
-        _error("Set coordinator.config in config.yml.")
+    # Build CoordinatorConfig from whichever section is present
+    if r.get("coordinator") and r.get("specialists"):
+        coord_cfg = from_agent_config(r)
+    elif Path(c.get("config", "coordinator/config.yml")).exists():
+        from coordinator.config import load_config
+        coord_cfg = load_config(c.get("config", "coordinator/config.yml"))
+    else:
+        _error("No coordinator/specialist config found.")
+        _error("Add researcher.coordinator + researcher.specialists to agent_config.yml.")
         sys.exit(1)
 
-    _header("coordinator", f"config={config_path}  workspace={workspace}")
+    _header("coordinator", f"workspace={workspace}")
 
     db_ok = _ensure_db(storage_path)
     store = None
@@ -224,7 +239,7 @@ def run_coordinator(cfg: dict, task: str | None) -> None:
 
     from coordinator import Coordinator
     coord = Coordinator(
-        config_path=config_path,
+        coordinator_config=coord_cfg,
         workspace_dir=workspace,
         storage_path=storage_path,
         memory_store=store,
@@ -258,23 +273,35 @@ def run_researcher(cfg: dict, goal: str | None) -> None:
     r = cfg.get("researcher", {})
     s = cfg.get("storage", {})
 
-    config_path  = r.get("config", "coordinator/config.yml")
     workspace    = r.get("workspace", "")
-    user_tools   = r.get("user_tools", "")
-    storage_path = s.get("path", "data/lancedb")
+    user_tools   = r.get("user_tools") or r.get("eval_script") or ""
+    storage_path = s.get("path", "agent_storage/lancedb")
 
     # Validate required fields
     errors = []
-    if not workspace or workspace == "/path/to/your/project":
-        errors.append("researcher.workspace must be set to your project directory in config.yml")
+    if not workspace or workspace in ("/path/to/your/project", "."):
+        _warn("researcher.workspace is set to '.', using current directory.")
+        workspace = "."
     if not user_tools:
-        errors.append("researcher.user_tools must point to a Python file with evaluate() + save()")
-    if not Path(config_path).exists():
-        errors.append(f"researcher.config not found: {config_path}")
+        errors.append(
+            "researcher.eval_script must point to a Python file with evaluate() + save()"
+        )
     for e in errors:
         _error(e)
     if errors:
         sys.exit(1)
+
+    # Build CoordinatorConfig from agent_config.yml researcher section
+    if r.get("coordinator") and r.get("specialists"):
+        coord_cfg = from_agent_config(r)
+    else:
+        config_path = r.get("config", "coordinator/config.yml")
+        if not Path(config_path).exists():
+            _error("No specialist config found.")
+            _error("Add researcher.coordinator + researcher.specialists to agent_config.yml.")
+            sys.exit(1)
+        from coordinator.config import load_config
+        coord_cfg = load_config(config_path)
 
     # Prompt file → research goal
     if not goal:
@@ -301,7 +328,7 @@ def run_researcher(cfg: dict, goal: str | None) -> None:
     researcher = AutoResearcher(
         workspace_dir=workspace,
         user_tools_path=user_tools,
-        config_path=config_path,
+        coordinator_config=coord_cfg,
         storage_path=storage_path,
         web_config=_web_config(cfg),
         debug=cfg.get("debug", False),

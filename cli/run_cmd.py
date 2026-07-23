@@ -48,23 +48,24 @@ def run_researcher_mode(cfg: CliConfig, initial_prompt: str | None) -> None:
     """Start the Coordinator in the full-screen TUI (researcher / multi-agent mode)."""
     _ensure_storage(cfg)
 
-    from storage import SharedMemoryStore
     from coordinator import Coordinator
+    from cli.config import ConfigError
     from tools.web_tools import WebConfig
 
-    r = cfg.researcher
-    specialists_path = Path(r.specialists_config)
-    if not specialists_path.exists():
+    try:
+        coord_cfg = cfg.coordinator_config
+    except (ValueError, KeyError) as exc:
         _die(
-            f"Specialist roster not found: {specialists_path}\n"
-            f"Run  [bold {ORANGE}]agentx init[/bold {ORANGE}]  or create it manually."
+            f"researcher section of agent_config.yml is incomplete:\n{exc}\n\n"
+            f"Run  [bold {ORANGE}]agentx init[/bold {ORANGE}]  to create a valid template."
         )
+        return  # unreachable — _die exits
 
     store = _open_store(cfg)
-    workspace = Path(r.workspace).resolve()
+    workspace = Path(cfg.researcher.workspace).resolve()
 
     coordinator = Coordinator(
-        config_path=specialists_path,
+        coordinator_config=coord_cfg,
         workspace_dir=workspace,
         storage_path=cfg.storage.path,
         memory_store=store,

@@ -166,28 +166,40 @@ agentx run agent -c /path/to/my_config.yml
 
 ## Configuration — `agent_config.yml`
 
-After `agentx init`, edit `agent_config.yml`:
+After `agentx init`, edit `agent_config.yml`. **This is the only config file the system uses.**
 
 ```yaml
-# Ollama model — used by both modes
+# Ollama model — used by both modes (specialists can override per-entry)
 model:
   name: qwen2.5-coder:7b
   base_url: http://localhost:11434
   temperature: 0.0
   context_window: 8192
 
-# Agent mode settings
+# Agent mode
 agent:
   name: agent
-  workspace: .              # directory the agent reads/writes
-  require_permission: true  # ask before writes/shell commands (non-TUI only)
+  workspace: .
 
-# Researcher mode settings
+# Researcher mode — coordinator + specialists defined right here
 researcher:
   workspace: .
-  specialists_config: agent_storage/specialists.yml
-  # Optional: path to an eval script for autonomous hypothesis testing
-  eval_script: null
+  eval_script: null         # optional — path to evaluate() + save() script
+
+  coordinator:
+    model: qwen2.5-coder:7b
+    context_window: 16384
+
+  specialists:
+    - name: coder
+      model: qwen2.5-coder:7b
+      expertise: [python, typescript, debugging, testing]
+      description: "Expert developer. Writes code, fixes bugs, adds tests."
+
+    - name: reviewer
+      model: qwen2.5-coder:7b
+      expertise: [code review, security, documentation]
+      description: "Code reviewer. Reviews, writes tests, produces docs."
 
 # Storage
 storage:
@@ -196,7 +208,7 @@ storage:
 
 # Web tools (available to all agents)
 web:
-  github_token: ""          # STRONGLY recommended — 5000 req/hr vs 60
+  github_token: ""          # STRONGLY recommended — 5000 req/hr vs 60 without
   timeout: 20
   max_pdf_pages: 60
   chunk_size: 2400
@@ -204,27 +216,6 @@ web:
   max_chunks_per_resource: 50
 
 debug: false
-```
-
-### Researcher mode — specialist roster (`agent_storage/specialists.yml`)
-
-Defines which models act as specialists under the coordinator:
-
-```yaml
-coordinator:
-  model: "qwen2.5-coder:7b"
-  num_ctx: 16384
-
-agents:
-  - name: "coder"
-    model: "qwen2.5-coder:7b"
-    expertise: [python, typescript, debugging, testing]
-    description: "Expert developer. Delegate implementation work here."
-
-  - name: "reviewer"
-    model: "qwen2.5-coder:7b"
-    expertise: [code review, security, documentation]
-    description: "Code reviewer. Delegate quality and docs work here."
 ```
 
 ### Evaluation script (`eval_script`)
@@ -272,12 +263,11 @@ web:
 
 ```
 your-project/
-├── agent_config.yml          # ← edit this
+├── agent_config.yml   # ← the only config file — edit this
 ├── agent_storage/
-│   ├── specialists.yml       # ← specialist roster (researcher mode)
-│   ├── lancedb/              # vector DB (created at runtime)
+│   ├── lancedb/       # vector DB (created automatically on first run)
 │   └── .gitignore
-└── eval.py                   # optional — for autonomous research loop
+└── eval.py            # optional — autonomous research loop (evaluate + save)
 ```
 
 ---
@@ -286,14 +276,15 @@ your-project/
 
 ### Using a different model for each specialist
 
-Edit `agent_storage/specialists.yml` and set `model:` per agent:
+Edit the `researcher.specialists` section of `agent_config.yml`:
 
 ```yaml
-agents:
-  - name: coder
-    model: qwen2.5-coder:14b   # bigger model for coding
-  - name: reviewer
-    model: llama3.2:latest      # different model for review
+researcher:
+  specialists:
+    - name: coder
+      model: qwen2.5-coder:14b   # bigger model for coding
+    - name: reviewer
+      model: llama3.2:latest      # different model for review
 ```
 
 ### Running in debug mode

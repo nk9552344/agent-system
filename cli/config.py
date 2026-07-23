@@ -34,7 +34,6 @@ class AgentConfig:
 @dataclass
 class ResearcherConfig:
     workspace: str = "."
-    specialists_config: str = "agent_storage/specialists.yml"
     eval_script: str | None = None
 
 
@@ -52,6 +51,14 @@ class CliConfig:
     storage: StorageConfig
     web: dict[str, Any] = field(default_factory=dict)
     debug: bool = False
+    # Built from researcher.coordinator + researcher.specialists
+    _researcher_raw: dict = field(default_factory=dict, repr=False)
+
+    @property
+    def coordinator_config(self):
+        """Return a CoordinatorConfig built from the researcher section."""
+        from coordinator.config import from_agent_config
+        return from_agent_config(self._researcher_raw)
 
     @classmethod
     def load(cls, path: str | Path = CONFIG_FILENAME) -> "CliConfig":
@@ -86,7 +93,6 @@ class CliConfig:
         r = raw.get("researcher", {})
         researcher = ResearcherConfig(
             workspace=r.get("workspace", "."),
-            specialists_config=r.get("specialists_config", "agent_storage/specialists.yml"),
             eval_script=r.get("eval_script") or None,
         )
 
@@ -103,4 +109,5 @@ class CliConfig:
             storage=storage,
             web=raw.get("web", {}),
             debug=bool(raw.get("debug", False)),
+            _researcher_raw=r,
         )

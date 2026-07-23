@@ -35,7 +35,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from agent.core import OllamaDeepAgent
-from coordinator.config import AgentSpec, CoordinatorConfig, load_config
+from coordinator.config import AgentSpec, CoordinatorConfig, from_agent_config, load_config
 from coordinator.git_worktree import WorktreeManager
 from coordinator.judge import ResultJudge
 from deepagents import CompiledSubAgent
@@ -151,14 +151,23 @@ class Coordinator:
 
     def __init__(
         self,
-        config_path: str | Path = "coordinator/config.yml",
+        coordinator_config: CoordinatorConfig | None = None,
         workspace_dir: str | Path = ".",
         storage_path: str | Path = "data/lancedb",
         memory_store: SharedMemoryStore | None = None,
         web_config: WebConfig | None = None,
         debug: bool = False,
+        *,
+        config_path: str | Path | None = None,  # legacy — use coordinator_config instead
     ) -> None:
-        cfg = load_config(config_path)
+        if coordinator_config is not None:
+            cfg = coordinator_config
+        elif config_path is not None:
+            cfg = load_config(config_path)
+        else:
+            raise ValueError(
+                "Coordinator requires either coordinator_config= or config_path=."
+            )
         workspace = Path(workspace_dir).resolve()
         self._workspace = workspace
         self._web_config = web_config or WebConfig()
