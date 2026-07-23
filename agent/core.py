@@ -47,7 +47,7 @@ from deepagents.backends import FilesystemBackend, LocalShellBackend
 
 from agent.config import AgentConfig
 from storage.memory_store import SharedMemoryStore
-from tools import make_all_tools
+from tools import WebConfig, make_all_tools
 
 # Appended to every agent's system prompt to reduce hallucination.
 _ACCURACY_SUFFIX = """
@@ -146,6 +146,7 @@ class OllamaDeepAgent:
         subagents: Sequence[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
         # --- Extra ---
         extra_tools: Sequence[BaseTool | Callable] | None = None,
+        web_config: WebConfig | None = None,
         debug: bool = False,
         name: str = "ollama-agent",
         checkpointer: BaseCheckpointSaver | None = None,
@@ -251,6 +252,7 @@ class OllamaDeepAgent:
             memory_store=self._memory_store,
             agent_name=name,
             shell_timeout=shell_snippet_timeout,
+            web_config=web_config,
         )
         all_tools: list[BaseTool | Callable] = [*custom_tools, *(extra_tools or [])]
 

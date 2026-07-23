@@ -36,5 +36,41 @@ storage:
   path: data/lancedb
   embedding_model: nomic-embed-text
 
+# ─── Web tools ────────────────────────────────────────────────────────────────
+# These settings apply to every agent (standalone, specialist, coordinator,
+# researcher) because web tools are part of the shared tool suite.
+web:
+  # GitHub Personal Access Token — STRONGLY RECOMMENDED.
+  # Without a token: 60 GitHub API requests / hour (exhausted quickly).
+  # With a token:  5 000 GitHub API requests / hour.
+  #
+  # Create one at: https://github.com/settings/tokens
+  # Required scopes: none (public repos only) — just create a "fine-grained"
+  # token with no extra permissions and paste it below.
+  #
+  # Alternatively set the GITHUB_TOKEN environment variable — the value
+  # here takes precedence if both are set.
+  github_token: ""
+
+  # HTTP request timeout in seconds (default: 20).
+  # Increase for slow networks or large binary downloads (e.g. big PDFs).
+  timeout: 20
+
+  # Maximum PDF pages to extract before truncating (default: 60).
+  # Large PDFs can be slow to parse; reduce this if needed.
+  max_pdf_pages: 60
+
+  # RAG chunking — how fetched content is split before storing in vector memory.
+  # Smaller chunk_size → finer-grained search hits, more chunks stored.
+  # Larger chunk_size → broader context per hit, fewer chunks.
+  chunk_size: 2400          # characters per chunk
+  chunk_overlap: 150        # overlap between consecutive chunks (for context continuity)
+  max_chunks_per_resource: 50  # hard cap per URL (≈ 120 k chars at default chunk_size)
+
+  # HTTP User-Agent header sent when scraping HTML pages.
+  # Looks like a real browser to avoid bot-detection blocks.
+  # Change only if you know a specific site needs a different UA.
+  user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
 # ─── Misc ─────────────────────────────────────────────────────────────────────
 debug: false

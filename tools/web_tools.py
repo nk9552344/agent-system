@@ -13,10 +13,13 @@ Capabilities:
   - list_web_resources    List every URL already ingested by any agent
 
 PDF parsing uses the first available library in priority order:
-  pypdf → pdfminer.six → pdftotext CLI → raw text extraction
+  pypdf → pdfminer.six → pdftotext CLI
 Install at least one: ``uv add pypdf`` or ``uv add pdfminer.six``
 
 For richer web search install: ``uv add duckduckgo-search``
+
+All tunables (GitHub token, timeout, chunk sizes, PDF page limit) are
+configured via the ``web:`` section of config.yml and passed in via WebConfig.
 """
 
 from __future__ import annotations
@@ -33,8 +36,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool, tool
 
@@ -43,31 +47,95 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ── Tuning constants ───────────────────────────────────────────────────────
-
-_TIMEOUT        = 20    # seconds per HTTP request
-_CHUNK_SIZE     = 2400  # characters per RAG memory chunk
-_CHUNK_OVERLAP  = 150   # overlap between adjacent chunks
-_MAX_CHUNKS     = 50    # hard ceiling: ≈ 120k chars max per resource
-_MAX_PDF_PAGES  = 60    # PDF pages to parse before truncating
-
-# ── HTTP headers ───────────────────────────────────────────────────────────
-
 _BROWSER_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-_HTML_HDRS = {
-    "User-Agent":      _BROWSER_UA,
-    "Accept":          "text/html,application/xhtml+xml,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
 
-_GH_HDRS = {
-    "User-Agent": "MultiAgentResearcher/1.0",
-    "Accept":     "application/vnd.github.v3+json",
-}
+# ═══════════════════════════════════════════════════════════════════════════
+# WebConfig  — all user-tunable knobs, read from config.yml → main.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class WebConfig:
+    """Settings that control web tool behaviour.
+
+    All fields have production-safe defaults so the tools work out of the box.
+    Override any value via the ``web:`` section of config.yml — main.py reads
+    that section and constructs a WebConfig that is threaded through to every
+    agent via make_all_tools / OllamaDeepAgent.
+
+    Attributes:
+        github_token:
+            GitHub Personal Access Token.
+            Without one: 60 API requests / hour (easily exhausted).
+            With one:  5 000 API requests / hour.
+            Create at https://github.com/settings/tokens
+            (no scopes needed for public repos).
+            Alternatively set the GITHUB_TOKEN environment variable —
+            the token in config.yml always takes precedence.
+        timeout:
+            HTTP request timeout in seconds (default 20).
+            Increase for slow networks or large file downloads.
+        max_pdf_pages:
+            Maximum PDF pages to extract before truncating (default 60).
+            Reduce if PDF parsing is too slow on your hardware.
+        chunk_size:
+            Characters per RAG memory chunk (default 2 400).
+            Smaller → finer-grained retrieval; larger → fewer chunks.
+        chunk_overlap:
+            Overlap between consecutive chunks in characters (default 150).
+            Keeps sentence context intact across chunk boundaries.
+        max_chunks_per_resource:
+            Hard cap on chunks stored per URL (default 50 ≈ 120 k chars).
+            Prevents one huge document from flooding the memory store.
+        user_agent:
+            HTTP User-Agent header for HTML page requests.
+    """
+
+    github_token:            str = field(default="")
+    timeout:                 int = field(default=20)
+    max_pdf_pages:           int = field(default=60)
+    chunk_size:              int = field(default=2400)
+    chunk_overlap:           int = field(default=150)
+    max_chunks_per_resource: int = field(default=50)
+    user_agent:              str = field(default=_BROWSER_UA)
+
+    def __post_init__(self) -> None:
+        # GITHUB_TOKEN env var as fallback (token in config.yml wins)
+        if not self.github_token:
+            self.github_token = os.environ.get("GITHUB_TOKEN", "")
+
+    def gh_headers(self) -> dict:
+        """GitHub API headers — includes Bearer auth when a token is configured."""
+        hdrs: dict = {
+            "User-Agent": "MultiAgentResearcher/1.0",
+            "Accept":     "application/vnd.github.v3+json",
+        }
+        if self.github_token:
+            hdrs["Authorization"] = f"Bearer {self.github_token}"
+        return hdrs
+
+    def html_headers(self) -> dict:
+        return {
+            "User-Agent":      self.user_agent,
+            "Accept":          "text/html,application/xhtml+xml,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "WebConfig":
+        """Build a WebConfig from a raw dict (e.g. cfg.get('web', {}))."""
+        return cls(
+            github_token=            str(d.get("github_token", "") or ""),
+            timeout=                 int(d.get("timeout",                 20)),
+            max_pdf_pages=           int(d.get("max_pdf_pages",           60)),
+            chunk_size=              int(d.get("chunk_size",            2400)),
+            chunk_overlap=           int(d.get("chunk_overlap",          150)),
+            max_chunks_per_resource= int(d.get("max_chunks_per_resource", 50)),
+            user_agent=              str(d.get("user_agent", _BROWSER_UA) or _BROWSER_UA),
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -76,35 +144,34 @@ _GH_HDRS = {
 
 def _http_raw(
     url: str,
+    cfg: WebConfig,
     *,
     method: str = "GET",
-    headers: dict | None = None,
+    extra_headers: dict | None = None,
     body: bytes | None = None,
 ) -> tuple[int, dict, bytes]:
-    """Low-level HTTP request. Returns (status, response_headers, body_bytes)."""
-    merged = {**_HTML_HDRS, **(headers or {})}
+    """Low-level HTTP request.  Returns (status_code, response_headers, body_bytes)."""
+    merged = {**cfg.html_headers(), **(extra_headers or {})}
     req = urllib.request.Request(url, data=body, headers=merged, method=method.upper())
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            resp_headers = dict(resp.headers)
-            return resp.status, resp_headers, resp.read()
+        with urllib.request.urlopen(req, timeout=cfg.timeout) as resp:
+            return resp.status, dict(resp.headers), resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, {}, exc.read() or b""
 
 
-def _http_text(url: str, headers: dict | None = None) -> tuple[int, str, str]:
-    """Fetch url, return (status, content_type, decoded_text)."""
-    status, resp_hdrs, raw = _http_raw(url, headers=headers)
-    ct = resp_hdrs.get("Content-Type", "")
+def _http_text(url: str, cfg: WebConfig, extra_headers: dict | None = None) -> tuple[int, str, str]:
+    """Fetch url → (status, content_type, decoded_text)."""
+    status, hdrs, raw = _http_raw(url, cfg, extra_headers=extra_headers)
+    ct = hdrs.get("Content-Type", "")
     m = re.search(r"charset=([^\s;\"']+)", ct)
-    charset = m.group(1).strip('"\'') if m else "utf-8"
+    charset = m.group(1).strip("\"'") if m else "utf-8"
     return status, ct, raw.decode(charset, errors="replace")
 
 
-def _http_json(url: str, headers: dict | None = None) -> tuple[int, Any]:
-    """Fetch JSON from url. Returns (status, parsed_object)."""
-    merged = {**_GH_HDRS, **(headers or {})}
-    status, _ct, text = _http_text(url, headers=merged)
+def _http_json(url: str, cfg: WebConfig) -> tuple[int, Any]:
+    """Fetch JSON from url using GitHub-style headers.  Returns (status, parsed_object)."""
+    status, _ct, text = _http_text(url, cfg, extra_headers=cfg.gh_headers())
     try:
         return status, json.loads(text)
     except Exception:
@@ -112,16 +179,15 @@ def _http_json(url: str, headers: dict | None = None) -> tuple[int, Any]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PDF parsing  (multi-fallback)
+# PDF parsing  (multi-fallback: pypdf → pdfminer.six → pdftotext CLI)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _pdf_via_pypdf(data: bytes) -> str | None:
+def _pdf_via_pypdf(data: bytes, max_pages: int) -> str | None:
     try:
         import pypdf  # type: ignore[import]
         reader = pypdf.PdfReader(io.BytesIO(data))
-        pages = reader.pages[:_MAX_PDF_PAGES]
-        parts = [p.extract_text() or "" for p in pages]
-        return "\n\n".join(parts).strip() or None
+        texts = [p.extract_text() or "" for p in reader.pages[:max_pages]]
+        return "\n\n".join(texts).strip() or None
     except ImportError:
         return None
     except Exception as exc:
@@ -129,15 +195,13 @@ def _pdf_via_pypdf(data: bytes) -> str | None:
         return None
 
 
-def _pdf_via_pdfminer(data: bytes) -> str | None:
+def _pdf_via_pdfminer(data: bytes, max_pages: int) -> str | None:
     try:
         from pdfminer.high_level import extract_text_to_fp  # type: ignore[import]
         from pdfminer.layout import LAParams
-
         out = io.StringIO()
-        extract_text_to_fp(io.BytesIO(data), out, laparams=LAParams(), maxpages=_MAX_PDF_PAGES)
-        text = out.getvalue().strip()
-        return text or None
+        extract_text_to_fp(io.BytesIO(data), out, laparams=LAParams(), maxpages=max_pages)
+        return out.getvalue().strip() or None
     except ImportError:
         return None
     except Exception as exc:
@@ -152,7 +216,7 @@ def _pdf_via_cli(data: bytes) -> str | None:
             tmp_path = tmp.name
         result = subprocess.run(
             ["pdftotext", "-q", tmp_path, "-"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=45,
         )
         os.unlink(tmp_path)
         if result.returncode == 0:
@@ -162,16 +226,20 @@ def _pdf_via_cli(data: bytes) -> str | None:
     return None
 
 
-def _parse_pdf(data: bytes) -> str:
+def _parse_pdf(data: bytes, cfg: WebConfig) -> str:
     """Extract text from PDF bytes using the first available method."""
-    for fn in (_pdf_via_pypdf, _pdf_via_pdfminer, _pdf_via_cli):
-        result = fn(data)
+    for fn in (
+        lambda: _pdf_via_pypdf(data, cfg.max_pdf_pages),
+        lambda: _pdf_via_pdfminer(data, cfg.max_pdf_pages),
+        lambda: _pdf_via_cli(data),
+    ):
+        result = fn()
         if result:
             return result
     return (
-        "[PDF text extraction failed. Install one of: pypdf, pdfminer.six, "
-        "or poppler-utils (pdftotext CLI) for PDF support. "
-        f"PDF size: {len(data):,} bytes]"
+        f"[PDF text extraction failed — {len(data):,} bytes. "
+        "Install one of: pypdf, pdfminer.six, or poppler-utils (pdftotext CLI). "
+        "Commands: uv add pypdf  OR  uv add pdfminer.six]"
     )
 
 
@@ -185,7 +253,7 @@ def _is_pdf(ct: str, url: str) -> bool:
 
 _SKIP_TAGS = frozenset({
     "script", "style", "head", "nav", "footer", "form",
-    "noscript", "aside", "header", "menu", "advertisement",
+    "noscript", "aside", "header", "menu",
 })
 _BLOCK_TAGS = frozenset({
     "p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "dt", "dd",
@@ -196,17 +264,15 @@ _CODE_TAGS = frozenset({"code", "pre", "kbd", "samp"})
 
 
 class _ContentExtractor(HTMLParser):
-    """HTML parser that extracts readable structured text including code blocks."""
+    """Extract readable text + code blocks from HTML."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self._buf:      list[str] = []
-        self._skip:     int = 0   # depth inside skip-tags
-        self._in_code:  int = 0   # depth inside code/pre tags
-        self._cur_tag:  str = ""
+        self._buf:     list[str] = []
+        self._skip:    int = 0
+        self._in_code: int = 0
 
     def handle_starttag(self, tag: str, attrs: list) -> None:
-        self._cur_tag = tag
         if tag in _SKIP_TAGS:
             self._skip += 1
             return
@@ -218,8 +284,9 @@ class _ContentExtractor(HTMLParser):
             self._buf.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in _SKIP_TAGS and self._skip > 0:
-            self._skip -= 1
+        if tag in _SKIP_TAGS:
+            if self._skip > 0:
+                self._skip -= 1
             return
         if tag in _CODE_TAGS:
             if self._in_code > 0:
@@ -241,7 +308,6 @@ class _ContentExtractor(HTMLParser):
 
     def get_text(self) -> str:
         raw = "".join(self._buf)
-        # collapse runs of blank lines
         return re.sub(r"\n{3,}", "\n\n", raw).strip()
 
 
@@ -258,30 +324,27 @@ def _html_to_text(html: str) -> str:
 # GitHub helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _gh_repo_parts(url: str) -> dict | None:
-    """Parse a GitHub URL into its components.
+def _gh_parse_url(url: str) -> dict | None:
+    """Decompose a GitHub URL into {owner, repo, type, branch, path}.
 
-    Returns dict with keys: owner, repo, type (root/file/tree/raw/other),
-    branch, path — or None if not a github.com URL.
+    Returns None if the URL is not a github.com URL.
     """
+    # raw.githubusercontent.com
+    mr = re.match(
+        r"https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)", url
+    )
+    if mr:
+        return {"owner": mr.group(1), "repo": mr.group(2),
+                "type": "raw", "branch": mr.group(3), "path": mr.group(4)}
+
     m = re.match(
         r"https?://github\.com/([^/]+)/([^/?\s#]+)"
-        r"(?:/(blob|tree|raw|releases|issues|pulls|wiki|actions|commits?)?"
-        r"(?:/([^/\s?#]+))?"  # branch
-        r"(/.+)?)?",          # path
+        r"(?:/(blob|tree|raw|releases|issues|pulls|wiki|commits?)?"
+        r"(?:/([^/\s?#]+))?"   # branch
+        r"(/.+)?)?",            # path
         url,
     )
     if not m:
-        # raw.githubusercontent.com
-        mr = re.match(
-            r"https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)",
-            url,
-        )
-        if mr:
-            return {
-                "owner": mr.group(1), "repo": mr.group(2),
-                "type": "raw", "branch": mr.group(3), "path": mr.group(4),
-            }
         return None
     kind = m.group(3) or "root"
     return {
@@ -289,100 +352,89 @@ def _gh_repo_parts(url: str) -> dict | None:
         "repo":   m.group(2),
         "type":   kind,
         "branch": m.group(4) or "HEAD",
-        "path":   (m.group(5) or "").lstrip("/") or "",
+        "path":   (m.group(5) or "").lstrip("/"),
     }
 
 
-def _gh_fetch_readme(owner: str, repo: str) -> str:
-    _status, data = _http_json(f"https://api.github.com/repos/{owner}/{repo}/readme")
+def _gh_fetch_readme(owner: str, repo: str, cfg: WebConfig) -> str:
+    _status, data = _http_json(f"https://api.github.com/repos/{owner}/{repo}/readme", cfg)
     if not isinstance(data, dict):
         return ""
     raw_url = data.get("download_url", "")
     if raw_url:
-        _s, _ct, text = _http_text(raw_url)
+        _s, _ct, text = _http_text(raw_url, cfg)
         return text[:8000]
-    # fallback: base64 encoded
     content_b64 = data.get("content", "")
     if content_b64:
         return base64.b64decode(content_b64.replace("\n", "")).decode("utf-8", errors="replace")[:8000]
     return ""
 
 
-def _gh_fetch_file(owner: str, repo: str, path: str, ref: str = "HEAD") -> str:
+def _gh_fetch_file(owner: str, repo: str, path: str, cfg: WebConfig, ref: str = "HEAD") -> str:
     url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
     if ref and ref != "HEAD":
         url += f"?ref={ref}"
-    _status, data = _http_json(url)
-    if not isinstance(data, dict):
-        return f"[GitHub: could not fetch {owner}/{repo}/{path}]"
-    # single file
-    if data.get("encoding") == "base64":
-        raw = base64.b64decode(data["content"].replace("\n", ""))
-        return raw.decode("utf-8", errors="replace")
-    if data.get("download_url"):
-        _s, _ct, text = _http_text(data["download_url"])
-        return text
-    # directory listing
+    _status, data = _http_json(url, cfg)
     if isinstance(data, list):
-        items = "\n".join(
-            f"  {'DIR ' if i.get('type')=='dir' else '    '}{i.get('name','')}"
-            for i in data[:60]
+        # directory listing
+        lines = "\n".join(
+            f"  {'DIR' if i.get('type') == 'dir' else 'FILE'}  {i.get('name', '')}"
+            for i in data[:80]
         )
-        return f"Directory listing ({owner}/{repo}/{path}):\n{items}"
-    return f"[GitHub: unexpected response for {path}]"
+        return f"Directory: {owner}/{repo}/{path}\n{lines}"
+    if isinstance(data, dict):
+        if data.get("encoding") == "base64":
+            raw = base64.b64decode(data["content"].replace("\n", ""))
+            return raw.decode("utf-8", errors="replace")
+        if data.get("download_url"):
+            _s, _ct, text = _http_text(data["download_url"], cfg)
+            return text
+    return f"[GitHub: could not fetch {owner}/{repo}/{path}]"
 
 
-def _gh_fetch_file_tree(owner: str, repo: str, max_files: int = 80) -> str:
-    """Return a flat file tree string using the Git Trees API."""
+def _gh_file_tree(owner: str, repo: str, cfg: WebConfig, max_files: int = 100) -> str:
     _status, data = _http_json(
-        f"https://api.github.com/repos/{owner}/{repo}/git/trees/HEAD?recursive=1"
+        f"https://api.github.com/repos/{owner}/{repo}/git/trees/HEAD?recursive=1", cfg
     )
     if not isinstance(data, dict):
         return ""
     tree = data.get("tree", [])
-    lines = []
-    for item in tree[:max_files]:
-        tp = "D" if item.get("type") == "tree" else "F"
-        lines.append(f"  [{tp}] {item.get('path', '')}")
+    lines = [
+        f"  {'D' if i.get('type') == 'tree' else 'F'}  {i.get('path', '')}"
+        for i in tree[:max_files]
+    ]
     if len(tree) > max_files:
-        lines.append(f"  … and {len(tree) - max_files} more files")
+        lines.append(f"  … and {len(tree) - max_files} more")
     return "\n".join(lines)
 
 
-def _gh_repo_summary(owner: str, repo: str) -> str:
-    """Fetch repo metadata + README + file tree and return a formatted string."""
-    _status, meta = _http_json(f"https://api.github.com/repos/{owner}/{repo}")
+def _gh_repo_summary(owner: str, repo: str, cfg: WebConfig) -> str:
+    _status, meta = _http_json(f"https://api.github.com/repos/{owner}/{repo}", cfg)
     parts: list[str] = []
-
     if isinstance(meta, dict):
-        desc    = meta.get("description") or ""
-        lang    = meta.get("language") or ""
-        stars   = meta.get("stargazers_count", "?")
-        topics  = ", ".join(meta.get("topics", []))
-        license_name = (meta.get("license") or {}).get("name", "")
         parts.append(
             f"GitHub repo: {owner}/{repo}\n"
-            f"Description: {desc}\n"
-            f"Language: {lang}   Stars: {stars}   License: {license_name}\n"
-            f"Topics: {topics}"
+            f"Description: {meta.get('description') or ''}\n"
+            f"Language: {meta.get('language') or ''}  "
+            f"Stars: {meta.get('stargazers_count', '?')}  "
+            f"License: {(meta.get('license') or {}).get('name', '')}\n"
+            f"Topics: {', '.join(meta.get('topics', []))}"
         )
-
-    readme = _gh_fetch_readme(owner, repo)
+    readme = _gh_fetch_readme(owner, repo, cfg)
     if readme:
         parts.append(f"\n--- README ---\n{readme}")
-
-    tree = _gh_fetch_file_tree(owner, repo)
+    tree = _gh_file_tree(owner, repo, cfg)
     if tree:
         parts.append(f"\n--- File tree ---\n{tree}")
-
     return "\n".join(parts)
 
 
-def _gh_search_repos(query: str, max_results: int = 8) -> list[dict]:
-    encoded = urllib.parse.quote_plus(query)
+def _gh_search_repos(query: str, cfg: WebConfig, max_results: int = 8) -> list[dict]:
+    enc = urllib.parse.quote_plus(query)
     _status, data = _http_json(
         f"https://api.github.com/search/repositories"
-        f"?q={encoded}&per_page={max_results}&sort=stars&order=desc"
+        f"?q={enc}&per_page={max_results}&sort=stars&order=desc",
+        cfg,
     )
     items = data.get("items", []) if isinstance(data, dict) else []
     return [
@@ -398,19 +450,20 @@ def _gh_search_repos(query: str, max_results: int = 8) -> list[dict]:
     ]
 
 
-def _gh_search_code(query: str, max_results: int = 6) -> list[dict]:
-    encoded = urllib.parse.quote_plus(query)
+def _gh_search_code(query: str, cfg: WebConfig, max_results: int = 6) -> list[dict]:
+    enc = urllib.parse.quote_plus(query)
     _status, data = _http_json(
-        f"https://api.github.com/search/code?q={encoded}&per_page={max_results}"
+        f"https://api.github.com/search/code?q={enc}&per_page={max_results}",
+        cfg,
     )
     items = data.get("items", []) if isinstance(data, dict) else []
     return [
         {
-            "name":       r.get("name", ""),
-            "path":       r.get("path", ""),
-            "repo":       (r.get("repository") or {}).get("full_name", ""),
-            "url":        r.get("html_url", ""),
-            "raw_url":    r.get("download_url") or r.get("url", ""),
+            "name":    r.get("name", ""),
+            "path":    r.get("path", ""),
+            "repo":    (r.get("repository") or {}).get("full_name", ""),
+            "url":     r.get("html_url", ""),
+            "raw_url": r.get("download_url") or r.get("url", ""),
         }
         for r in items
     ]
@@ -425,35 +478,42 @@ def _arxiv_id_from_url(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _arxiv_fetch_meta(arxiv_id: str) -> str:
-    """Fetch structured arXiv metadata via the Atom API (no key needed)."""
+def _arxiv_fetch(arxiv_id: str, cfg: WebConfig) -> str:
+    """Fetch arXiv metadata via Atom API, then attempt full-text PDF extraction."""
     clean_id = re.sub(r"v\d+$", "", arxiv_id)
-    api_url = f"https://export.arxiv.org/api/query?id_list={clean_id}&max_results=1"
-    try:
-        _status, _ct, xml = _http_text(api_url)
-        # Extract key fields with simple regex (avoid xml.etree for speed)
-        title   = re.search(r"<title>(?!ArXiv)(.+?)</title>", xml, re.S)
-        summary = re.search(r"<summary>(.+?)</summary>", xml, re.S)
-        authors = re.findall(r"<name>(.+?)</name>", xml)
-        pub     = re.search(r"<published>(.+?)</published>", xml)
-        cats    = re.findall(r'term="([^"]+)"', xml)
+    _status, _ct, xml = _http_text(
+        f"https://export.arxiv.org/api/query?id_list={clean_id}&max_results=1", cfg
+    )
+    title   = re.search(r"<title>(?!ArXiv)(.+?)</title>", xml, re.S)
+    summary = re.search(r"<summary>(.+?)</summary>", xml, re.S)
+    authors = re.findall(r"<name>(.+?)</name>", xml)
+    pub     = re.search(r"<published>(.+?)</published>", xml)
+    cats    = re.findall(r'term="([^"]+)"', xml)
 
-        parts = [f"arXiv:{arxiv_id}"]
-        if title:
-            parts.append(f"Title: {title.group(1).strip()}")
-        if authors:
-            parts.append(f"Authors: {', '.join(a.strip() for a in authors[:6])}")
-        if pub:
-            parts.append(f"Published: {pub.group(1)[:10]}")
-        if cats:
-            parts.append(f"Categories: {', '.join(cats[:5])}")
-        if summary:
-            parts.append(f"\nAbstract:\n{summary.group(1).strip()}")
-        parts.append(f"\nPDF: https://arxiv.org/pdf/{arxiv_id}")
-        return "\n".join(parts)
-    except Exception as exc:
-        logger.debug("arXiv API failed for %s: %s", arxiv_id, exc)
-        return f"arXiv:{arxiv_id} (metadata fetch failed)"
+    parts = [f"arXiv:{arxiv_id}"]
+    if title:
+        parts.append(f"Title: {title.group(1).strip()}")
+    if authors:
+        parts.append(f"Authors: {', '.join(a.strip() for a in authors[:6])}")
+    if pub:
+        parts.append(f"Published: {pub.group(1)[:10]}")
+    if cats:
+        parts.append(f"Categories: {', '.join(cats[:5])}")
+    if summary:
+        parts.append(f"\nAbstract:\n{summary.group(1).strip()}")
+    parts.append(f"\nPDF: https://arxiv.org/pdf/{arxiv_id}")
+    meta_text = "\n".join(parts)
+
+    # Also extract full text from the PDF
+    try:
+        _s, _ct, pdf_bytes_raw = _http_raw(f"https://arxiv.org/pdf/{arxiv_id}", cfg)
+        if pdf_bytes_raw and len(pdf_bytes_raw) > 4096:
+            full_text = _parse_pdf(pdf_bytes_raw, cfg)
+            if full_text and not full_text.startswith("[PDF text"):
+                return f"{meta_text}\n\n--- Full text ---\n{full_text}"
+    except Exception:
+        pass
+    return meta_text
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -461,8 +521,7 @@ def _arxiv_fetch_meta(arxiv_id: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _ddg_search(query: str, max_results: int) -> list[dict]:
-    """Return [{title, url, snippet}] via DuckDuckGo."""
-    # Preferred: duckduckgo-search library (pip install duckduckgo-search)
+    """Return [{title, url, snippet}] via DuckDuckGo (no API key required)."""
     try:
         from duckduckgo_search import DDGS  # type: ignore[import]
         with DDGS() as ddgs:
@@ -473,13 +532,15 @@ def _ddg_search(query: str, max_results: int) -> list[dict]:
     except ImportError:
         pass
 
-    # Fallback: DDG instant-answer JSON API
     enc = urllib.parse.quote_plus(query)
     try:
-        _status, _ct, text = _http_text(
-            f"https://api.duckduckgo.com/?q={enc}&format=json&no_html=1&skip_disambig=1"
+        # Use a plain urlopen for the fallback (no cfg needed — no auth, short timeout)
+        req = urllib.request.Request(
+            f"https://api.duckduckgo.com/?q={enc}&format=json&no_html=1&skip_disambig=1",
+            headers={"User-Agent": "MultiAgentBot/1.0"},
         )
-        data = json.loads(text)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
         results: list[dict] = []
         if data.get("AbstractURL"):
             results.append({
@@ -504,35 +565,34 @@ def _ddg_search(query: str, max_results: int) -> list[dict]:
 # Chunking + shared-memory storage
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _chunk_text(text: str) -> list[str]:
-    """Split text into overlapping chunks suitable for vector search."""
-    if len(text) <= _CHUNK_SIZE:
+def _chunk_text(text: str, cfg: WebConfig) -> list[str]:
+    """Split text into overlapping chunks sized for vector-search retrieval."""
+    if len(text) <= cfg.chunk_size:
         return [text]
     chunks: list[str] = []
     start = 0
-    while start < len(text) and len(chunks) < _MAX_CHUNKS:
-        end = start + _CHUNK_SIZE
-        chunks.append(text[start:end])
-        start += _CHUNK_SIZE - _CHUNK_OVERLAP
+    while start < len(text) and len(chunks) < cfg.max_chunks_per_resource:
+        chunks.append(text[start : start + cfg.chunk_size])
+        start += cfg.chunk_size - cfg.chunk_overlap
     return chunks
 
 
 def _store_resource(
     store: "SharedMemoryStore",
+    cfg: WebConfig,
     *,
     url: str,
     content: str,
     label: str,
     agent_name: str,
-    source_type: str,          # "html", "pdf", "github", "arxiv", "raw", "api"
+    source_type: str,
 ) -> list[str]:
     """Chunk content and persist every chunk to the shared memory store.
 
-    Returns list of memory IDs (one per chunk).
-    Each chunk carries the source URL and type so semantic search can
-    surface the right pieces across large documents.
+    Each chunk carries full provenance (source URL, type, part N/M) so the
+    LLM always knows where a retrieved snippet came from.  Returns memory IDs.
     """
-    chunks = _chunk_text(content.strip())
+    chunks = _chunk_text(content.strip(), cfg)
     total  = len(chunks)
     mem_ids: list[str] = []
 
@@ -542,7 +602,7 @@ def _store_resource(
             f"Label:  {label}\n"
             f"Source: {url}\n"
             f"Part:   {i + 1}/{total}\n"
-            f"---\n"
+            "---\n"
         )
         mem_id = store.add_memory(
             header + chunk,
@@ -551,7 +611,7 @@ def _store_resource(
         )
         mem_ids.append(mem_id)
 
-    # One note per resource (dedup key = url) — fast lookup
+    # Dedup index — one note per URL, fast exact lookup
     store.save_note(
         f"web_resource:{url[:100]}",
         f"[{source_type}] {label[:160]} | {total} chunk(s) | by {agent_name or 'agent'}",
@@ -564,99 +624,86 @@ def _store_resource(
 # Universal URL fetcher  (auto-detects content type and source)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _fetch_url_content(url: str) -> tuple[str, str]:
-    """Fetch url and return (source_type, content_text).
+def _fetch_url_content(url: str, cfg: WebConfig) -> tuple[str, str]:
+    """Fetch url → (source_type, content_text).
 
-    source_type is one of: "github", "arxiv", "pdf", "html", "raw"
+    source_type: "github" | "arxiv" | "pdf" | "html" | "raw"
     """
-    # ── GitHub ─────────────────────────────────────────────────────────────
-    gh = _gh_repo_parts(url)
+    # ── GitHub ──────────────────────────────────────────────────────────
+    gh = _gh_parse_url(url)
     if gh:
         owner, repo = gh["owner"], gh["repo"]
-        kind = gh["type"]
-        path = gh["path"]
-        ref  = gh["branch"]
+        kind        = gh["type"]
+        path        = gh["path"]
+        ref         = gh["branch"]
 
         if kind in ("root", ""):
-            return "github", _gh_repo_summary(owner, repo)
+            return "github", _gh_repo_summary(owner, repo, cfg)
 
         if kind in ("blob", "raw") and path:
-            content = _gh_fetch_file(owner, repo, path, ref)
+            content = _gh_fetch_file(owner, repo, path, cfg, ref)
             return "github", f"GitHub file: {owner}/{repo}/{path}\n\n{content}"
 
         if kind == "tree" and path:
-            content = _gh_fetch_file(owner, repo, path, ref)
+            content = _gh_fetch_file(owner, repo, path, cfg, ref)
             return "github", f"GitHub dir: {owner}/{repo}/{path}\n\n{content}"
+        # other GitHub page types fall through to HTML parse
 
-        # Other GitHub page types — fall through to HTML
-    else:
-        gh = None
-
-    # ── arXiv ──────────────────────────────────────────────────────────────
+    # ── arXiv ───────────────────────────────────────────────────────────
     arxiv_id = _arxiv_id_from_url(url)
     if arxiv_id:
-        meta = _arxiv_fetch_meta(arxiv_id)
-        # Also try to get the PDF for full text
-        pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
-        try:
-            _status, _ct, pdf_bytes = _http_raw(pdf_url)
-            if pdf_bytes and len(pdf_bytes) > 1000:
-                pdf_text = _parse_pdf(pdf_bytes)
-                if pdf_text and not pdf_text.startswith("[PDF text"):
-                    return "arxiv", f"{meta}\n\n--- Full text ---\n{pdf_text}"
-        except Exception:
-            pass
-        return "arxiv", meta
+        return "arxiv", _arxiv_fetch(arxiv_id, cfg)
 
-    # ── HEAD request to detect content-type cheaply ─────────────────────
+    # ── HEAD to detect content-type cheaply ─────────────────────────────
     try:
-        head_status, head_hdrs, _ = _http_raw(url, method="HEAD")
+        _hs, head_hdrs, _ = _http_raw(url, cfg, method="HEAD")
         ct_head = head_hdrs.get("Content-Type", "")
     except Exception:
         ct_head = ""
 
     if _is_pdf(ct_head, url):
-        # ── PDF ────────────────────────────────────────────────────────────
-        _status, ct, pdf_bytes = _http_raw(url)
-        return "pdf", _parse_pdf(pdf_bytes)
+        _s, _ct, raw_bytes = _http_raw(url, cfg)
+        return "pdf", _parse_pdf(raw_bytes, cfg)
 
-    # ── Generic HTML / plain-text ──────────────────────────────────────────
-    _status, ct, raw = _http_raw(url)
+    # ── Full GET ─────────────────────────────────────────────────────────
+    _status, ct, raw_text_or_bytes = None, "", b""
+    try:
+        _status, ct, raw_text_or_bytes = _http_raw(url, cfg)
+    except Exception as exc:
+        raise
+
     if _is_pdf(ct, url):
-        return "pdf", _parse_pdf(raw)
+        return "pdf", _parse_pdf(raw_text_or_bytes, cfg)
 
+    decoded = raw_text_or_bytes.decode("utf-8", errors="replace")
     ct_lower = ct.lower()
+
     if "text/plain" in ct_lower or "text/markdown" in ct_lower:
-        return "raw", raw.decode("utf-8", errors="replace")
+        return "raw", decoded
 
     if "json" in ct_lower or "xml" in ct_lower:
-        return "raw", raw.decode("utf-8", errors="replace")[:12000]
+        return "raw", decoded[:16000]
 
-    text = _html_to_text(raw.decode("utf-8", errors="replace"))
-    return "html", text
+    return "html", _html_to_text(decoded)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Tool factory  — call once per agent, pass the shared store
+# Tool factory
 # ═══════════════════════════════════════════════════════════════════════════
-
-# used in type hints inside helpers above
-from typing import Any  # noqa: E402 (after TYPE_CHECKING block)
-
 
 def make_web_tools(
     store: "SharedMemoryStore",
     agent_name: str = "",
+    config: WebConfig | None = None,
 ) -> list[BaseTool]:
-    """Build web tools bound to the shared memory store.
-
-    Every piece of content fetched or parsed is stored in ``store``
-    and is instantly searchable by any other agent sharing the same store.
+    """Build web tools bound to the shared memory store and WebConfig.
 
     Args:
-        store: The shared LanceDB-backed memory store.
-        agent_name: Agent name stamped on every memory write.
+        store:      The shared LanceDB-backed memory store (all agents share one).
+        agent_name: Agent identity stamped on every memory write.
+        config:     Web tool settings from config.yml.  Uses safe defaults if None.
     """
+    cfg = config or WebConfig()
 
     # ──────────────────────────────────────────────────────────────────────
     @tool
@@ -664,8 +711,7 @@ def make_web_tools(
         """Search the web for articles, GitHub repos, documentation, or research papers.
 
         Returns titles, URLs, and snippets. Use the results to decide which URLs
-        to ingest with fetch_and_store_url. Tip: be specific — e.g. 'FastAPI
-        async background tasks Python 3.12' beats 'FastAPI'.
+        to ingest with fetch_and_store_url.
 
         Install ``duckduckgo-search`` for much better results (uv add duckduckgo-search).
 
@@ -693,18 +739,18 @@ def make_web_tools(
     def github_search(query: str, search_type: str = "repositories", max_results: int = 6) -> str:
         """Search GitHub for repositories or code files.
 
-        Useful for finding reference implementations, popular libraries,
-        or code examples for a specific pattern.
+        Set a GitHub token in config.yml (web.github_token) or the GITHUB_TOKEN
+        environment variable to raise the API rate limit from 60 to 5 000 req/hr.
 
         Args:
-            query:       Search query (e.g. 'FastAPI CRUD SQLite stars:>100').
-            search_type: One of 'repositories' (default) or 'code'.
+            query:       Search terms (e.g. 'FastAPI CRUD SQLite stars:>500').
+            search_type: 'repositories' (default) or 'code'.
             max_results: Results to return (default 6, max 10).
         """
         max_results = min(max_results, 10)
         try:
             if search_type == "code":
-                items = _gh_search_code(query, max_results)
+                items = _gh_search_code(query, cfg, max_results)
                 if not items:
                     return f"No code results for: {query!r}"
                 lines = [f"GitHub code search — {query!r}:\n"]
@@ -712,23 +758,20 @@ def make_web_tools(
                     lines.append(f"{i}. {r['repo']}/{r['path']}")
                     lines.append(f"   URL: {r['url']}")
             else:
-                items = _gh_search_repos(query, max_results)
+                items = _gh_search_repos(query, cfg, max_results)
                 if not items:
                     return f"No repository results for: {query!r}"
                 lines = [f"GitHub repo search — {query!r}:\n"]
                 for i, r in enumerate(items, 1):
-                    desc = r["description"][:100] if r["description"] else ""
-                    lines.append(
-                        f"{i}. ⭐{r['stars']:,}  {r['name']}  [{r['language']}]"
-                    )
+                    desc = (r["description"] or "")[:100]
+                    lines.append(f"{i}. ⭐{r['stars']:,}  {r['name']}  [{r['language']}]")
                     if desc:
                         lines.append(f"   {desc}")
                     if r["topics"]:
                         lines.append(f"   Topics: {r['topics']}")
                     lines.append(f"   URL: {r['url']}")
-            lines.append(
-                "\nTip: call fetch_and_store_url on any URL above to ingest its full content."
-            )
+            auth_note = "" if cfg.github_token else " (tip: set web.github_token in config.yml for higher rate limits)"
+            lines.append(f"\nTip: call fetch_and_store_url on any URL to ingest its content.{auth_note}")
             return "\n".join(lines)
         except Exception as exc:
             return f"GitHub search error: {exc}"
@@ -739,26 +782,24 @@ def make_web_tools(
         """Fetch ANY URL and store its parsed content in the shared RAG memory.
 
         Automatically handles:
-        • GitHub repos     — README + file tree + repo metadata
-        • GitHub files     — raw source code (blob/tree/raw URLs)
-        • PDFs             — full text extraction (needs pypdf or pdfminer.six)
-        • arXiv papers     — abstract + full text from PDF when available
-        • HTML pages       — content extraction (strips nav/ads/scripts)
+        • GitHub repos     — README + recursive file tree + repo metadata
+        • GitHub files     — raw source (blob / tree / raw / raw.githubusercontent.com)
+        • PDFs             — full text (needs pypdf, pdfminer.six, or pdftotext CLI)
+        • arXiv papers     — abstract + full text extracted from PDF
+        • HTML pages       — content extraction (strips nav / ads / scripts)
         • Documentation    — readthedocs, GitHub Pages, official docs
-        • Plain text/JSON  — stored as-is
-        • REST API URLs    — raw response stored for later reference
+        • Plain text / JSON / XML — stored as-is
+        • REST API URLs    — raw response stored for reference
 
-        Large documents are automatically chunked so every section is
-        independently searchable. All chunks are immediately visible to
-        every agent sharing the same memory store.
+        Large documents are chunked automatically so every section is
+        independently searchable. Content is visible to all agents instantly.
 
         Args:
             url:         Full URL to fetch (http or https).
-            description: Why this resource matters — stored as context.
-                         E.g. 'FastAPI async patterns reference'.
+            description: Why this resource matters — stored as context alongside the content.
         """
         try:
-            source_type, content = _fetch_url_content(url)
+            source_type, content = _fetch_url_content(url, cfg)
         except urllib.error.HTTPError as exc:
             return f"HTTP {exc.code} {exc.reason} — {url}"
         except urllib.error.URLError as exc:
@@ -770,14 +811,11 @@ def make_web_tools(
         if not content:
             return f"Fetched {url} but found no readable content (type: {source_type})."
 
-        label = description.strip() or url
+        label   = description.strip() or url
         mem_ids = _store_resource(
-            store,
-            url=url,
-            content=content,
-            label=label,
-            agent_name=agent_name,
-            source_type=source_type,
+            store, cfg,
+            url=url, content=content, label=label,
+            agent_name=agent_name, source_type=source_type,
         )
         preview = content[:300].replace("\n", " ")
         return (
@@ -799,29 +837,27 @@ def make_web_tools(
     ) -> str:
         """Make a raw HTTP request (like curl) and return the response.
 
-        Use this for REST APIs, webhooks, or any endpoint that requires custom
-        headers, methods, or a request body. Optionally store the response in
-        shared memory for later retrieval by any agent.
+        Use for REST APIs, webhooks, or any endpoint requiring custom headers
+        or a request body. Optionally stores the response in shared memory.
 
         Args:
-            method:         HTTP method — GET, POST, PUT, PATCH, DELETE, HEAD.
-            url:            Full URL including query string if needed.
-            headers_json:   JSON object of request headers (default: '{}').
+            method:         HTTP verb — GET, POST, PUT, PATCH, DELETE, HEAD.
+            url:            Full URL including query string.
+            headers_json:   JSON object of extra request headers (default '{}').
                             E.g. '{"Authorization": "Bearer TOKEN", "Content-Type": "application/json"}'
-            body:           Request body as a string (for POST/PUT).
-                            For JSON APIs pass the JSON string directly.
-            store_response: If True, saves the response body to shared memory.
-            description:    Label used when store_response=True.
+            body:           Request body string (for POST / PUT).
+            store_response: If True, saves the response to shared RAG memory.
+            description:    Label used when store_response is True.
         """
         try:
-            extra_headers = json.loads(headers_json) if headers_json.strip() else {}
+            extra = json.loads(headers_json) if headers_json.strip() else {}
         except json.JSONDecodeError as exc:
             return f"headers_json parse error: {exc}"
 
         body_bytes = body.encode("utf-8") if body else None
         try:
             status, resp_hdrs, resp_bytes = _http_raw(
-                url, method=method, headers=extra_headers, body=body_bytes
+                url, cfg, method=method, extra_headers=extra, body=body_bytes
             )
         except urllib.error.URLError as exc:
             return f"Network error: {exc.reason}"
@@ -829,76 +865,64 @@ def make_web_tools(
             return f"Request error: {exc}"
 
         ct = resp_hdrs.get("Content-Type", "unknown")
-        # Try to decode
         try:
             resp_text = resp_bytes.decode("utf-8", errors="replace")
         except Exception:
-            resp_text = f"[binary response: {len(resp_bytes)} bytes]"
+            resp_text = f"[binary: {len(resp_bytes)} bytes]"
 
-        result_lines = [
+        lines = [
             f"HTTP {status}  {method.upper()} {url}",
             f"Content-Type: {ct}",
-            f"Response length: {len(resp_bytes)} bytes",
+            f"Body length: {len(resp_bytes)} bytes",
             "---",
             resp_text[:4000],
         ]
         if len(resp_text) > 4000:
-            result_lines.append(f"… [truncated, {len(resp_text) - 4000} more chars]")
+            lines.append(f"… [{len(resp_text) - 4000} chars truncated]")
 
         if store_response and resp_text.strip():
             label = description.strip() or f"{method.upper()} {url}"
             _store_resource(
-                store,
-                url=url,
-                content=resp_text,
-                label=label,
-                agent_name=agent_name,
-                source_type="api",
+                store, cfg,
+                url=url, content=resp_text, label=label,
+                agent_name=agent_name, source_type="api",
             )
-            result_lines.append(f"\n[Response stored in memory as: '{label}']")
+            lines.append(f"\n[Stored in shared memory as: '{label}']")
 
-        return "\n".join(result_lines)
+        return "\n".join(lines)
 
     # ──────────────────────────────────────────────────────────────────────
     @tool
     def search_web_resources(query: str, limit: int = 5, source_type: str = "") -> str:
         """Semantic search over all web content ingested by any agent.
 
-        Always check this BEFORE fetching a new URL — the resource may already
-        be in memory. All agents share the same store, so content fetched by
-        a specialist is also visible to the coordinator and vice versa.
+        Always check this BEFORE fetching a new URL — the content may already
+        be in shared memory from another agent. All agents share one store.
 
         Args:
             query:       What you're looking for (natural language).
             limit:       Max chunks to return (default 5).
-            source_type: Optional filter — 'pdf', 'github', 'arxiv', 'html',
-                         'api', 'raw'. Leave empty to search all types.
+            source_type: Optional filter — 'pdf', 'github', 'arxiv', 'html', 'api', 'raw'.
+                         Leave empty to search all types.
         """
         try:
-            # Over-fetch then filter so we always get `limit` web results
-            candidates = store.search_memories(
-                f"WEB_RESOURCE {query}",
-                limit=limit * 6,
-            )
+            candidates = store.search_memories(f"WEB_RESOURCE {query}", limit=limit * 6)
             hits = [r for r in candidates if "web_resource" in (r.get("tags") or "")]
             if source_type:
                 hits = [r for r in hits if f"source_type:{source_type}" in (r.get("tags") or "")]
             hits = hits[:limit]
 
             if not hits:
-                tip = (
-                    f" with source_type='{source_type}'" if source_type else ""
-                )
+                suffix = f" with source_type='{source_type}'" if source_type else ""
                 return (
-                    f"No web resources found{tip} matching: {query!r}\n"
+                    f"No web resources found{suffix} matching: {query!r}\n"
                     "Tip: use web_search → fetch_and_store_url to ingest content first."
                 )
 
             lines = [f"Web resources matching {query!r} ({len(hits)} chunks):\n"]
             for r in hits:
-                ts = time.strftime("%Y-%m-%d", time.localtime(r.get("created_at", 0)))
+                ts      = time.strftime("%Y-%m-%d", time.localtime(r.get("created_at", 0)))
                 content = r.get("content", "")
-                # Show the header + first ~350 chars of the chunk
                 lines.append(f"[{ts}]")
                 lines.append(content[:450])
                 lines.append("---")
@@ -909,10 +933,9 @@ def make_web_tools(
     # ──────────────────────────────────────────────────────────────────────
     @tool
     def list_web_resources(limit: int = 40) -> str:
-        """List every URL that has been fetched and stored by any agent.
+        """List every URL fetched and stored by any agent in this session.
 
-        Check this before fetching to avoid duplicate work. Shows source type,
-        chunk count, and which agent ingested each resource.
+        Check this before fetching to avoid duplicate work.
 
         Args:
             limit: Max entries to show (default 40).

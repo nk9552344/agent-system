@@ -24,6 +24,8 @@ from pathlib import Path
 
 import yaml
 
+from tools.web_tools import WebConfig
+
 # ─── ANSI colour helpers (no extra dep) ──────────────────────────────────────
 
 _BOLD   = "\033[1m"
@@ -131,6 +133,11 @@ def _repl(run_fn, label: str = "Agent") -> None:
 
 # ─── Agent mode ───────────────────────────────────────────────────────────────
 
+def _web_config(cfg: dict) -> WebConfig:
+    """Build a WebConfig from the ``web:`` section of config.yml."""
+    return WebConfig.from_dict(cfg.get("web", {}))
+
+
 def run_agent(cfg: dict, task: str | None) -> None:
     a = cfg.get("agent", {})
     s = cfg.get("storage", {})
@@ -171,6 +178,7 @@ def run_agent(cfg: dict, task: str | None) -> None:
         name=name,
         system_prompt=a.get("system_prompt") or None,
         require_permission=a.get("require_permission", True),
+        web_config=_web_config(cfg),
         debug=cfg.get("debug", False),
     )
     _info(f"Agent ready  ({name} / {model})")
@@ -220,6 +228,7 @@ def run_coordinator(cfg: dict, task: str | None) -> None:
         workspace_dir=workspace,
         storage_path=storage_path,
         memory_store=store,
+        web_config=_web_config(cfg),
         debug=cfg.get("debug", False),
     )
 
@@ -294,6 +303,7 @@ def run_researcher(cfg: dict, goal: str | None) -> None:
         user_tools_path=user_tools,
         config_path=config_path,
         storage_path=storage_path,
+        web_config=_web_config(cfg),
         debug=cfg.get("debug", False),
     )
 

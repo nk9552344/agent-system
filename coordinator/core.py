@@ -40,6 +40,7 @@ from coordinator.git_worktree import WorktreeManager
 from coordinator.judge import ResultJudge
 from deepagents import CompiledSubAgent
 from storage.memory_store import SharedMemoryStore
+from tools.web_tools import WebConfig
 
 logger = logging.getLogger(__name__)
 
@@ -154,11 +155,13 @@ class Coordinator:
         workspace_dir: str | Path = ".",
         storage_path: str | Path = "data/lancedb",
         memory_store: SharedMemoryStore | None = None,
+        web_config: WebConfig | None = None,
         debug: bool = False,
     ) -> None:
         cfg = load_config(config_path)
         workspace = Path(workspace_dir).resolve()
         self._workspace = workspace
+        self._web_config = web_config or WebConfig()
 
         # --- Shared memory (all agents, including coordinator, share this) --------
         self._store = memory_store or SharedMemoryStore(
@@ -195,6 +198,7 @@ class Coordinator:
                 require_permission=False,
                 persistent_memory=True,
                 system_prompt=_specialist_prompt(spec),
+                web_config=self._web_config,
                 debug=debug,
             )
             self._specialists[spec.name] = agent
@@ -227,6 +231,7 @@ class Coordinator:
             system_prompt=coord_prompt,
             subagents=compiled_subagents,
             extra_tools=coord_tools,
+            web_config=self._web_config,
             debug=debug,
         )
 
@@ -278,10 +283,11 @@ class Coordinator:
     # -------------------------------------------------------------------------
 
     def _make_coordinator_tools(self, cfg: CoordinatorConfig) -> list[BaseTool]:
-        store = self._store
-        judge = self._judge
+        store      = self._store
+        judge      = self._judge
         worktree_mgr = self._worktree_mgr
-        workspace = self._workspace
+        workspace  = self._workspace
+        web_config = self._web_config
 
         @tool
         def judge_result(agent_name: str, task_given: str, agent_output: str) -> str:
@@ -392,10 +398,11 @@ class Coordinator:
                     num_ctx=cfg.coordinator.num_ctx,
                     workspace_dir=workspace,
                     memory_store=store,
-                    name=f"web-researcher",
+                    name="web-researcher",
                     require_permission=False,
                     persistent_memory=False,
                     system_prompt=_WEB_RESEARCHER_PROMPT,
+                    web_config=web_config,
                 )
                 return agent.run(
                     f"Research topic: {topic}\n\n"

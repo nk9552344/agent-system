@@ -48,6 +48,7 @@ from coordinator.config import AgentSpec, load_config
 from coordinator.git_worktree import WorktreeManager
 from deepagents import CompiledSubAgent
 from storage.memory_store import SharedMemoryStore
+from tools.web_tools import WebConfig
 
 logger = logging.getLogger(__name__)
 
@@ -237,10 +238,12 @@ class AutoResearcher:
         config_path: str | Path = "coordinator/config.yml",
         storage_path: str | Path = "data/lancedb",
         memory_store: SharedMemoryStore | None = None,
+        web_config: WebConfig | None = None,
         debug: bool = False,
     ) -> None:
         self._workspace = Path(workspace_dir).resolve()
         self._debug = debug
+        self._web_config = web_config or WebConfig()
         self._current_iteration: int = 0
 
         # Shared mutable state written by tool closures, read by the Python loop
@@ -280,6 +283,7 @@ class AutoResearcher:
                 require_permission=False,
                 persistent_memory=True,
                 system_prompt=_specialist_prompt(spec),
+                web_config=self._web_config,
                 debug=debug,
             )
             compiled.append(CompiledSubAgent(
@@ -306,6 +310,7 @@ class AutoResearcher:
             system_prompt=system_prompt,
             subagents=compiled,
             extra_tools=extra_tools,
+            web_config=self._web_config,
             debug=debug,
         )
         self._cfg = cfg
