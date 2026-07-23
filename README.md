@@ -32,7 +32,7 @@ ollama pull nomic-embed-text     # for vector embeddings
 
 ### Option 1 — Download a pre-built binary (no Python needed)
 
-Go to the [**Releases page**](https://github.com/YOUR_USER/agentx/releases) and download the binary for your platform:
+Go to the [**Releases page**](https://github.com/nk1044/agentx/releases) and download the binary for your platform:
 
 | File | Platform |
 |---|---|
@@ -55,7 +55,7 @@ agentx --version
 ### Option 2 — One-line installer (auto-detects platform)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USER/agentx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nk1044/agentx/main/install.sh | bash
 ```
 
 Tries the pre-built binary first; falls back to `uv tool install` or `pip install` if no binary exists for your platform.
@@ -63,7 +63,7 @@ Tries the pre-built binary first; falls back to `uv tool install` or `pip instal
 ### Option 3 — Install from source (needs Python 3.13 + uv)
 
 ```bash
-git clone https://github.com/YOUR_USER/agentx
+git clone https://github.com/nk1044/agentx
 cd agentx
 uv tool install .
 
@@ -78,7 +78,7 @@ pip install -e .
 ### Option 4 — Build your own binary
 
 ```bash
-git clone https://github.com/YOUR_USER/agentx
+git clone https://github.com/nk1044/agentx
 cd agentx
 ./build_binary.sh
 # Binary: dist/agentx-<os>-<arch>
@@ -192,6 +192,7 @@ agentx run agent -c /path/to/my_config.yml
 |---|---|
 | `/new` | Start a fresh conversation thread (forgets previous context) |
 | `/clear` | Clear the output area |
+| `/stop` | Stop the response from agent |
 | `/help` | Show available commands |
 | `/quit` | Exit the session |
 | `Ctrl+N` | New thread (keyboard shortcut for `/new`) |

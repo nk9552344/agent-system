@@ -2,7 +2,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 #  install.sh — One-line installer for agentx
 #
-#  curl -fsSL https://raw.githubusercontent.com/YOUR_USER/agentx/main/install.sh | bash
+#  curl -fsSL https://raw.githubusercontent.com/nk1044/agentx/main/install.sh | bash
 #
 #  What this does:
 #    1. Tries to install a pre-built binary from GitHub Releases (fastest)
@@ -15,7 +15,7 @@ set -euo pipefail
 PURPLE='\033[0;35m'; ORANGE='\033[0;33m'
 GREEN='\033[0;32m';  RED='\033[0;31m';  DIM='\033[2m'; NC='\033[0m'
 
-REPO="YOUR_GITHUB_USER/agentx"   # ← replace with your GitHub user/repo
+REPO="nk1044/agentx"   # ← replace with your GitHub user/repo
 VERSION="latest"
 
 log()  { echo -e "${PURPLE}◆${NC}  $*"; }
