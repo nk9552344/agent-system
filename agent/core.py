@@ -91,51 +91,103 @@ _TOOL_GUIDANCE_TEMPLATE = """\
 
 All file paths must be ABSOLUTE. Prepend {workspace} to any relative path.
 
-## Tools
+## HARD LIMIT: max ~20 lines per tool call argument
+
+Ollama truncates any tool-call JSON argument that exceeds ~3000 characters (~50 lines).
+This causes "unexpected end of JSON input" errors. NEVER put more than 20 lines of
+content in any single tool argument — not in execute, not in write_file, nowhere.
+
+## Writing files — always use chunked writes
+
+Break ALL file content into chunks of 15-20 lines. Call one tool per chunk.
+
+**New file (>20 lines):**
+  write_file(file_path="{workspace}/README.md", content="line1\nline2\n...line15\n")
+  append_to_file(file_path="{workspace}/README.md", content="line16\n...line30\n")
+  append_to_file(file_path="{workspace}/README.md", content="line31\n...line45\n")
+  ...keep calling append_to_file until all content is written...
+  read_file(file_path="{workspace}/README.md")   ← verify the final file
+
+**Full rewrite of existing file:**
+  overwrite_file_start(file_path="{workspace}/README.md", content="line1\n...line15\n")
+  append_to_file(file_path="{workspace}/README.md", content="line16\n...line30\n")
+  ...keep appending until done...
+
+**Replace a large section inside a file:**
+  1. read_file — find the line numbers of the section to replace
+  2. write_file(file_path="/tmp/new_section", content="...chunk 1 (15 lines)...")
+     append_to_file(file_path="/tmp/new_section", content="...chunk 2...")
+  3. splice_file(file_path="{workspace}/file", start_line=N, end_line=M,
+                 content_file="/tmp/new_section")
+
+**Small targeted edits (1-5 lines, no special chars):**
+  edit_file(file_path="...", old_string="exact text", new_string="replacement")
+
+## Other tools
 
 **Shell:**
-  execute(command="git status")   — any command; cwd = workspace
+  execute(command="git status")   — any shell command; cwd = workspace
+  execute(command="ls -la")
 
-**Files** (absolute paths only):
+**Find files:**
   ls(path="{workspace}")
-  read_file(file_path="/abs/path/file")
-  write_file(file_path="/abs/path", content="...")     — NEW files only (fails if exists)
-  edit_file(file_path="/abs/path", old_string="a", new_string="b")  — small edits only
   glob(pattern="**/*.py", path="{workspace}")
   grep(pattern="def foo", path="{workspace}")
 
-**Task planning (write_todos):**
-  For any task with 3+ steps, call write_todos first to plan.
-  Mark each step "in_progress" before starting, "completed" immediately after.
-  Do NOT stop until all todos are marked completed.
+**Task planning:**
+  write_todos — call this BEFORE any file-writing task. One todo per file or action.
+  Mark each todo "in_progress" before starting, "completed" immediately after.
+  Do NOT stop until ALL todos are completed.
 
-**Memory scratchpad** (in-memory only, does NOT write to disk):
+**Memory (in-memory only, does NOT write files):**
   save_note(key, value) / recall_note(key)
 
-## Critical rules
+## Key rules
 
-1. **Large file rewrites → shell heredoc.** Never use edit_file with a large old_string —
-   the JSON will be truncated by Ollama and fail to parse. For rewrites or new content >20 lines,
-   write the file via execute:
-
-   execute(command="cat << 'HEREDOC' > /abs/path/file.md
-...all new content here...
-HEREDOC")
-
-2. **edit_file → small patches only.** Use it ONLY for targeted replacements of a few lines.
-   For anything larger, use the heredoc approach above.
-
-3. **write_file → new files only.** Use heredoc or edit_file for files that already exist.
-
-4. **save_note ≠ file write.** save_note stores in memory, nothing on disk."""
+- write_file → NEW files only (errors if file exists; use overwrite_file_start for existing)
+- save_note ≠ file write — it never touches disk
+- execute cwd = workspace, no need to cd first
+- If the same tool returns the same result twice: STOP and try a different tool"""
 
 # Appended after tool guidance on every agent's system prompt.
 _ACCURACY_SUFFIX = """\
 
-## Accuracy
+## You are a ReAct agent — loop until done
 
-- Never invent file contents, paths, or command output — always use a tool to verify.
-- If a task cannot be completed as described, say why precisely instead of partially faking it."""
+You run in a Reason → Act → Observe loop. Keep calling tools until the task is
+fully complete. NEVER stop after one tool call to report a partial result.
+
+### Error recovery (mandatory)
+
+When a tool call fails or returns an error, you MUST try a different approach.
+Do NOT explain the error to the user — FIX IT. Examples:
+
+| Error | Fix |
+|-------|-----|
+| edit_file / write_file / execute JSON truncated | Use chunked writes: write_file + append_to_file |
+| write_file "file already exists" | Use overwrite_file_start + append_to_file |
+| Command failed / non-zero exit | Read the error, adjust the command, retry |
+| File not found | Use glob or ls to locate the correct path, then retry |
+| Same tool returns same result twice | Stop calling that tool, try a DIFFERENT approach |
+| Any other tool error | Try an alternative tool or approach — never give up |
+
+Explaining an error without fixing it is a FAILURE. Always attempt the fix first.
+Only report an unresolvable blocker after ≥3 failed attempts at different approaches.
+
+### Task completion
+
+You are finished ONLY when:
+- Every file the task required has been written/edited and verified
+- Every command the task required has succeeded
+- All write_todos items (if used) are marked completed
+- You have given the user a brief summary of what was done
+
+"I encountered an error" is NOT a completed task.
+
+### Accuracy
+
+- Never invent file contents, paths, or command output — always verify with a tool.
+- If a task truly cannot be done, explain exactly why after exhausting all options."""
 
 
 class OllamaDeepAgent:
@@ -407,7 +459,7 @@ class OllamaDeepAgent:
         from langgraph.types import Command
 
         tid = thread_id or self.new_thread_id()
-        config = {"configurable": {"thread_id": tid}}
+        config = {"configurable": {"thread_id": tid}, "recursion_limit": 100}
         state = self._graph.invoke({"messages": task}, config=config)
 
         # Handle human-in-the-loop interrupts
@@ -442,7 +494,7 @@ class OllamaDeepAgent:
         from langgraph.types import Command
 
         tid = thread_id or self.new_thread_id()
-        config = {"configurable": {"thread_id": tid}}
+        config = {"configurable": {"thread_id": tid}, "recursion_limit": 100}
         seen: set[str] = set()
 
         def _stream_and_yield(inp: Any) -> dict[str, Any]:
@@ -513,7 +565,7 @@ class OllamaDeepAgent:
         from langgraph.types import Command
 
         tid    = thread_id or self.new_thread_id()
-        config = {"configurable": {"thread_id": tid}}
+        config = {"configurable": {"thread_id": tid}, "recursion_limit": 100}
 
         _DONE: object = object()
         q: SimpleQueue = SimpleQueue()

@@ -1,175 +1,145 @@
-"""Workspace-scoped file tools — replace deepagents' absolute-path-only built-ins.
+"""Chunk-safe file writing tools.
 
-These tools accept relative paths (resolved against workspace_dir) and use
-parameter names that models naturally produce ('path', not 'file_path').
+Ollama truncates any tool-call JSON argument that exceeds ~3000 chars (~50 lines).
+These tools let the agent write large files in small chunks (15-20 lines each)
+so no single tool-call argument ever overflows.
+
+Workflow for a NEW file (>20 lines):
+  write_file(file_path="/abs/path/file", content="...lines 1-15...")
+  append_to_file(file_path="/abs/path/file", content="...lines 16-30...")
+  append_to_file(file_path="/abs/path/file", content="...lines 31-45...")
+  ...repeat until done, then verify with read_file...
+
+Workflow for FULL REWRITE of an existing file:
+  overwrite_file_start(file_path="/abs/path/file", content="...lines 1-15...")
+  append_to_file(file_path="/abs/path/file", content="...lines 16-30...")
+  ...repeat until done...
+
+Workflow for a LARGE SECTION REPLACEMENT inside a file:
+  1. read_file to find start/end line numbers
+  2. Build replacement content in a temp file (same chunk pattern above)
+  3. splice_file(file_path=..., start_line=N, end_line=M, content_file="/tmp/new_section")
 """
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 from langchain_core.tools import BaseTool, tool
 
 
-def make_file_tools(workspace_dir: Path) -> list[BaseTool]:
-    """Return file tools scoped to workspace_dir."""
-
-    def _resolve(path: str) -> Path:
-        p = Path(path)
-        return p if p.is_absolute() else workspace_dir / p
-
-    # ── Core file operations ────────────────────────────────────────────────────
+def make_file_tools() -> list[BaseTool]:
+    """Return chunk-safe file writing tools."""
 
     @tool
-    def write_file(path: str, content: str = "") -> str:
-        """Create or overwrite a file on disk (path relative to workspace)."""
-        target = _resolve(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-        return f"✓ Wrote {len(content)} chars to {path}"
+    def append_to_file(file_path: str, content: str) -> str:
+        """Append a chunk of content (15-20 lines max) to an existing file.
+
+        Use this to write large files by breaking content into small chunks —
+        Ollama truncates tool-call JSON above ~3000 chars (~50 lines), so never
+        pass more than 15-20 lines per call.
+
+        First-call pattern:
+          - NEW file:      write_file(...)  then  append_to_file(...)  × N
+          - EXISTING file: overwrite_file_start(...)  then  append_to_file(...)  × N
+        """
+        try:
+            path = Path(file_path)
+            if not path.exists():
+                return (
+                    f"Error: '{file_path}' does not exist. "
+                    "Create it first with write_file (new) or overwrite_file_start (existing)."
+                )
+            if content and not content.endswith("\n"):
+                content += "\n"
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(content)
+            lines = content.count("\n")
+            total = len(path.read_text(encoding="utf-8").splitlines())
+            return f"Appended {lines} lines to '{file_path}' (file now has {total} lines total)."
+        except Exception as exc:
+            return f"Error: {exc}"
 
     @tool
-    def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> str:
-        """Read a file and return its text (optionally a line range)."""
-        target = _resolve(path)
-        if not target.exists():
-            return f"File not found: {path}"
-        if not target.is_file():
-            return f"Not a file: {path}"
-        text = target.read_text(encoding="utf-8", errors="replace")
-        if start_line == 1 and end_line is None:
-            return text or "(empty file)"
-        lines = text.splitlines()
-        start = max(0, start_line - 1)
-        end   = end_line if end_line else len(lines)
-        return "\n".join(lines[start:end]) or "(empty)"
+    def overwrite_file_start(file_path: str, content: str) -> str:
+        """Truncate an existing file and write the first chunk (15-20 lines max).
 
-    @tool
-    def edit_file(
-        path: str,
-        old_string: str,
-        new_string: str,
-        replace_all: bool = False,
-    ) -> str:
-        """Replace old_string with new_string in a file (old_string must exist exactly)."""
-        target = _resolve(path)
-        if not target.exists():
-            return f"File not found: {path}"
-        content = target.read_text(encoding="utf-8")
-        if old_string not in content:
-            return f"String not found in {path}: {old_string!r}"
-        count = content.count(old_string)
-        if not replace_all and count > 1:
+        Use this to start a FULL REWRITE of an existing file. The file is cleared
+        and the first chunk is written. Then use append_to_file for the remaining chunks.
+
+        For NEW files, use write_file instead (it creates the file).
+        """
+        try:
+            path = Path(file_path)
+            if not path.exists():
+                return (
+                    f"Error: '{file_path}' does not exist. "
+                    "For new files, use write_file instead."
+                )
+            if content and not content.endswith("\n"):
+                content += "\n"
+            path.write_text(content, encoding="utf-8")
+            lines = content.count("\n")
             return (
-                f"String appears {count} times in {path}. "
-                "Use replace_all=True or provide more surrounding context to make it unique."
+                f"Truncated and wrote first {lines} lines to '{file_path}'. "
+                "Use append_to_file for subsequent chunks."
             )
-        updated = (
-            content.replace(old_string, new_string)
-            if replace_all
-            else content.replace(old_string, new_string, 1)
-        )
-        target.write_text(updated, encoding="utf-8")
-        n = count if replace_all else 1
-        return f"✓ Replaced {n} occurrence(s) in {path}"
+        except Exception as exc:
+            return f"Error: {exc}"
 
     @tool
-    def list_directory(path: str = ".") -> str:
-        """List files and subdirectories at a path (default: workspace root)."""
-        target = _resolve(path)
-        if not target.exists():
-            return f"Path does not exist: {path}"
-        if not target.is_dir():
-            return f"Not a directory: {path}"
-        entries = sorted(target.iterdir(), key=lambda e: (e.is_file(), e.name))
-        if not entries:
-            return f"(empty directory: {path})"
-        lines = []
-        for e in entries:
-            prefix = "📄 " if e.is_file() else "📁 "
-            lines.append(f"{prefix}{e.name}")
-        return "\n".join(lines)
-
-    # ── Directory tree / search tools ───────────────────────────────────────────
-
-    @tool
-    def get_directory_tree(
-        path: str = ".",
-        max_depth: int = 3,
-        show_hidden: bool = False,
+    def splice_file(
+        file_path: str,
+        start_line: int,
+        end_line: int,
+        content_file: str,
     ) -> str:
-        """Show a recursive tree of the directory structure."""
-        target = _resolve(path)
-        if not target.exists():
-            return f"Path does not exist: {path}"
-        if not target.is_dir():
-            return f"Not a directory: {path}"
+        """Replace lines start_line–end_line (1-indexed inclusive) with content from a temp file.
 
-        lines: list[str] = [str(target)]
+        Use this to replace a large section INSIDE a file without touching the rest.
 
-        def _walk(directory: Path, prefix: str, depth: int) -> None:
-            if depth > max_depth:
-                return
-            try:
-                entries = sorted(directory.iterdir(), key=lambda e: (e.is_file(), e.name))
-            except PermissionError:
-                lines.append(f"{prefix}[permission denied]")
-                return
-            visible = [e for e in entries if show_hidden or not e.name.startswith(".")]
-            for i, entry in enumerate(visible):
-                connector = "└── " if i == len(visible) - 1 else "├── "
-                lines.append(f"{prefix}{connector}{entry.name}")
-                if entry.is_dir():
-                    ext = "    " if i == len(visible) - 1 else "│   "
-                    _walk(entry, prefix + ext, depth + 1)
+        Full workflow:
+          1. read_file to find the line numbers of the section to replace
+          2. Build replacement content in a temp file using the chunk pattern:
+               write_file(file_path="/tmp/new_section", content="...chunk 1...")
+               append_to_file(file_path="/tmp/new_section", content="...chunk 2...")
+          3. splice_file(file_path="/abs/path/target", start_line=N, end_line=M,
+                         content_file="/tmp/new_section")
+        """
+        try:
+            target = Path(file_path)
+            temp   = Path(content_file)
 
-        _walk(target, "", 1)
-        return "\n".join(lines)
+            if not target.exists():
+                return f"Error: '{file_path}' does not exist."
+            if not temp.exists():
+                return (
+                    f"Error: content_file '{content_file}' does not exist. "
+                    "Build it first with write_file + append_to_file chunks."
+                )
 
-    @tool
-    def find_files(
-        pattern: str,
-        search_dir: str = ".",
-        max_results: int = 50,
-    ) -> str:
-        """Find files by glob pattern (e.g. '**/*.py', 'src/*.ts')."""
-        target = _resolve(search_dir)
-        if not target.exists():
-            return f"Directory not found: {search_dir}"
-        matches = list(target.glob(pattern))[:max_results]
-        if not matches:
-            return f"No files matching '{pattern}' in '{search_dir}'."
-        lines = [
-            str(p.relative_to(workspace_dir)) if p.is_relative_to(workspace_dir) else str(p)
-            for p in sorted(matches)
-        ]
-        suffix = f"\n…showing first {max_results}" if len(matches) == max_results else ""
-        return "\n".join(lines) + suffix
+            original_lines = target.read_text(encoding="utf-8").splitlines(keepends=True)
+            new_content    = temp.read_text(encoding="utf-8")
 
-    @tool
-    def diff_files(file_a: str, file_b: str) -> str:
-        """Show a unified diff between two files."""
-        path_a, path_b = _resolve(file_a), _resolve(file_b)
-        for p, name in [(path_a, file_a), (path_b, file_b)]:
-            if not p.exists():
-                return f"File not found: {name}"
-            if not p.is_file():
-                return f"Not a file: {name}"
-        result = subprocess.run(
-            ["diff", "-u", str(path_a), str(path_b)],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            return "Files are identical."
-        return result.stdout or result.stderr
+            if new_content and not new_content.endswith("\n"):
+                new_content += "\n"
 
-    return [
-        write_file,
-        read_file,
-        edit_file,
-        list_directory,
-        get_directory_tree,
-        find_files,
-        diff_files,
-    ]
+            total = len(original_lines)
+            s = max(1, start_line)
+            e = min(total, end_line)
+            if s > total:
+                return f"Error: start_line {start_line} exceeds file length ({total} lines)."
+
+            result = original_lines[: s - 1] + [new_content] + original_lines[e:]
+            target.write_text("".join(result), encoding="utf-8")
+
+            replaced  = e - s + 1
+            new_lines = new_content.count("\n")
+            return (
+                f"Replaced lines {s}–{e} ({replaced} old lines) with "
+                f"{new_lines} new lines in '{file_path}'."
+            )
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    return [append_to_file, overwrite_file_start, splice_file]
