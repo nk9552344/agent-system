@@ -5,14 +5,14 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 coordinator:
-  model: "qwen2.5-coder:7b"        # reasoning model for task decomposition
+  model: "qwen2.5:14b-instruct"        # reasoning model for task decomposition
   base_url: "http://localhost:11434"
   temperature: 0
   num_ctx: 16384                    # larger context for the coordinator
 
 agents:
   - name: "coder"
-    model: "qwen2.5-coder:7b"
+    model: "gemma4:12b"
     base_url: "http://localhost:11434"
     temperature: 0
     num_ctx: 8192
@@ -29,7 +29,7 @@ agents:
       Works autonomously using file tools and a shell.
 
   - name: "reviewer"
-    model: "qwen2.5-coder:7b"
+    model: "qwen2.5:14b-instruct"
     base_url: "http://localhost:11434"
     temperature: 0
     num_ctx: 8192

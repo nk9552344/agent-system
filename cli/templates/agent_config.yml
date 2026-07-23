@@ -7,7 +7,7 @@
 
 # ── Ollama model (used by agent mode; also the default for specialists) ───────
 model:
-  name: qwen2.5-coder:7b          # any model pulled via  ollama pull <name>
+  name: qwen2.5:14b-instruct         # any model pulled via  ollama pull <name>
   base_url: http://localhost:11434 # Ollama server URL
   temperature: 0.0                 # 0 = deterministic; higher = creative
   context_window: 8192             # token context window sent to Ollama
@@ -36,7 +36,7 @@ researcher:
   # The coordinator decomposes tasks and routes subtasks to specialists.
   # Use a larger / more capable model here for better task decomposition.
   coordinator:
-    model: qwen2.5-coder:7b
+    model: qwen2.5:14b-instruct
     base_url: http://localhost:11434
     temperature: 0.0
     context_window: 16384          # larger context for multi-agent orchestration
@@ -47,7 +47,7 @@ researcher:
   # Add / remove specialists or point them at different Ollama models.
   specialists:
     - name: coder
-      model: qwen2.5-coder:7b
+      model: gemma4:12b
       base_url: http://localhost:11434
       temperature: 0.0
       context_window: 8192
@@ -64,7 +64,7 @@ researcher:
         Works autonomously using file tools and a shell.
 
     - name: reviewer
-      model: qwen2.5-coder:7b
+      model: qwen2.5:14b-instruct
       base_url: http://localhost:11434
       temperature: 0.0
       context_window: 8192

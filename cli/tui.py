@@ -16,15 +16,15 @@ from textual.widgets import Input, RichLog, Static
 
 _CSS = """
 Screen {
-    background: #0F0A1E;
+    background: #0F172A;
     layers: base;
 }
 
 /* ── Header bar ── */
 #header {
     height: 1;
-    background: #4C1D95;
-    color: #F8FAFC;
+    background: #1E293B;
+    color: #F1F5F9;
     padding: 0 2;
     text-style: bold;
     content-align: left middle;
@@ -34,18 +34,18 @@ Screen {
 #output {
     height: 1fr;
     margin: 0 1;
-    border: solid #7C3AED;
-    background: #0F0A1E;
+    border: solid #06B6D4;
+    background: #0F172A;
     color: #E2E8F0;
-    scrollbar-color: #7C3AED #0F0A1E;
+    scrollbar-color: #334155 #0F172A;
     scrollbar-size: 1 1;
 }
 
 /* ── Divider ── */
 #divider {
     height: 1;
-    background: #1E1B4B;
-    color: #4C1D95;
+    background: #1E293B;
+    color: #334155;
     margin: 0 1;
     padding: 0 0;
 }
@@ -57,21 +57,21 @@ Screen {
 }
 
 #prompt {
-    border: solid #F97316;
-    background: #0F0A1E;
-    color: #F8FAFC;
+    border: solid #334155;
+    background: #0F172A;
+    color: #F1F5F9;
     height: 3;
 }
 
 #prompt:focus {
-    border: double #F97316;
+    border: solid #06B6D4;
 }
 
 /* ── Footer bar ── */
 #footer {
     height: 1;
-    background: #1E1B4B;
-    color: #6B7280;
+    background: #151F2E;
+    color: #475569;
     padding: 0 2;
     content-align: left middle;
 }
@@ -79,12 +79,12 @@ Screen {
 
 # ── Output line styles (Rich markup) ──────────────────────────────────────────
 
-_USER_PREFIX  = "[bold #A78BFA]You[/bold #A78BFA] [#6B7280]›[/#6B7280] "
+_USER_PREFIX  = "[bold #38BDF8]You[/bold #38BDF8] [#475569]›[/#475569] "
 _AGENT_STYLE  = "#CBD5E1"
-_TOOL_STYLE   = "#F59E0B"
-_ERROR_STYLE  = "bold #EF4444"
-_OK_STYLE     = "#10B981"
-_DIM_STYLE    = "#6B7280"
+_TOOL_STYLE   = "#FBBF24"
+_ERROR_STYLE  = "bold #F87171"
+_OK_STYLE     = "#22C55E"
+_DIM_STYLE    = "#64748B"
 
 _FOOTER_TEXT = (
     "  Enter: send  ·  Ctrl+N: new thread  ·  /help: commands  ·  Ctrl+C: quit  "
@@ -133,11 +133,11 @@ class AgentTUI(App):
     def on_mount(self) -> None:
         log = self._log()
         log.write(
-            f"[bold #7C3AED]◆ AGENTX[/bold #7C3AED]"
-            f"  [#6B7280]│[/#6B7280]  "
-            f"[#F97316]{self._mode}[/#F97316] mode"
-            f"  [#6B7280]│[/#6B7280]  "
-            f"[#6B7280]model: {self._model}[/#6B7280]"
+            f"[bold #06B6D4]◆ AGENTX[/bold #06B6D4]"
+            f"  [#475569]│[/#475569]  "
+            f"[#38BDF8]{self._mode}[/#38BDF8] mode"
+            f"  [#475569]│[/#475569]  "
+            f"[#64748B]model: {self._model}[/#64748B]"
         )
         log.write(
             f"[{_DIM_STYLE}]Thread #1 started.  "
@@ -220,7 +220,7 @@ class AgentTUI(App):
     @work(thread=True, exclusive=False)
     def _run_agent(self, task: str) -> None:
         self._busy = True
-        self.call_from_thread(self._set_status, "thinking…", "#F97316")
+        self.call_from_thread(self._set_status, "thinking…", "#FBBF24")
 
         log = self._log()
         line_buf: list[str] = []
@@ -269,7 +269,7 @@ class AgentTUI(App):
             _flush("", end=True)
             self.call_from_thread(log.write, "")
             self._busy = False
-            self.call_from_thread(self._set_status, "ready", "#10B981")
+            self.call_from_thread(self._set_status, "ready", "#22C55E")
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -277,16 +277,16 @@ class AgentTUI(App):
         return self.query_one("#output", RichLog)
 
     def _header_text(self) -> str:
-        return (
-            f"  ◆ AGENTX  ·  {self._mode}  ·  {self._model}"
-        )
+        return f"  ◆ AGENTX  ·  {self._mode}  ·  {self._model}"
 
     def _set_status(self, status: str, color: str) -> None:
         icon = "⟳" if status == "thinking…" else "●"
         header = self.query_one("#header", Static)
         header.update(
-            f"  [bold]◆ AGENTX[/bold]  ·  {self._mode}  ·  {self._model}"
-            f"  [{_DIM_STYLE}]│[/{_DIM_STYLE}]  "
+            f"  [bold #06B6D4]◆ AGENTX[/bold #06B6D4]  "
+            f"[{_DIM_STYLE}]·[/{_DIM_STYLE}]  "
+            f"[#38BDF8]{self._mode}[/#38BDF8]  "
+            f"[{_DIM_STYLE}]·  {self._model}  ·[/{_DIM_STYLE}]  "
             f"[{color}]{icon} {status}[/{color}]  "
             f"  [{_DIM_STYLE}]thread #{self._thread_num}[/{_DIM_STYLE}]"
         )
