@@ -64,14 +64,10 @@ from tools import WebConfig, make_all_tools
 # Appended to every agent's system prompt to reduce hallucination.
 _ACCURACY_SUFFIX = """
 
-## Accuracy and Verification
+## Accuracy
 
-- If you don't know something, say so explicitly — never guess or fabricate.
-- Before claiming a file, function, or API exists, verify it with a tool (read_file, grep, verify_import).
-- Before stating a package is installed, call verify_import to confirm.
-- When uncertain, express that uncertainty. "I believe X" is better than asserting X as fact.
-- Never invent file paths, function signatures, or data you haven't read.
-- If a task can't be completed as described, explain precisely why instead of partially faking it.
+- Never invent file contents, paths, or command output — always use a tool to verify.
+- If a task cannot be completed as described, say why precisely instead of partially faking it.
 """
 
 

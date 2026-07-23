@@ -298,7 +298,11 @@ class AgentTUI(App):
         live = self.query_one("#live-strip", Static)
         stop = self._stop_event
 
-        # ── Markdown paragraph accumulator ─────────────────────────────────────
+        # ── Streaming line writer ───────────────────────────────────────────────
+        # para_buf is used ONLY to accumulate code fence blocks for Markdown
+        # rendering. Regular text lines are written to #output immediately so
+        # content appears in chat line-by-line instead of jumping in all at once
+        # after a full paragraph accumulates.
         para_buf: list[str] = []
         in_code_fence = [False]
         full_resp_buf: list[str] = []   # accumulates all response text for history
@@ -313,11 +317,17 @@ class AgentTUI(App):
             stripped = line.strip()
             if stripped.startswith("```"):
                 in_code_fence[0] = not in_code_fence[0]
-            if stripped == "" and not in_code_fence[0]:
-                _flush_para()
+                para_buf.append(line + "\n")
+                if not in_code_fence[0]:
+                    # Closing fence — render the buffered code block
+                    _flush_para()
+            elif in_code_fence[0]:
+                para_buf.append(line + "\n")
+            elif stripped == "":
                 self.call_from_thread(log.write, "")
             else:
-                para_buf.append(line + "\n")
+                # Regular text line — write immediately for live generating effect
+                self.call_from_thread(log.write, Markdown(line))
 
         # ── <think>…</think> state machine ─────────────────────────────────────
         think_state  = "response"

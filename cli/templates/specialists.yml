@@ -5,7 +5,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 coordinator:
-  model: "qwen2.5:14b-instruct"        # reasoning model for task decomposition
+  model: "gpt-oss:20b"        # reasoning model for task decomposition
   base_url: "http://localhost:11434"
   temperature: 0
   num_ctx: 16384                    # larger context for the coordinator
@@ -29,7 +29,7 @@ agents:
       Works autonomously using file tools and a shell.
 
   - name: "reviewer"
-    model: "qwen2.5:14b-instruct"
+    model: "gpt-oss:20b"
     base_url: "http://localhost:11434"
     temperature: 0
     num_ctx: 8192
