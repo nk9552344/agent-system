@@ -17,7 +17,7 @@ Runs on [Ollama](https://ollama.ai) — no cloud API keys, no data leaving your 
 
 ## Requirements
 
-- Python 3.13+
+- Python 3.13+  (only needed for install methods 2 and 3)
 - [Ollama](https://ollama.ai) running locally
 
 Pull the default models:
@@ -30,27 +30,62 @@ ollama pull nomic-embed-text     # for vector embeddings
 
 ## Installation
 
-### From source (development)
+### Option 1 — Download a pre-built binary (no Python needed)
+
+Go to the [**Releases page**](https://github.com/YOUR_USER/agentx/releases) and download the binary for your platform:
+
+| File | Platform |
+|---|---|
+| `agentx-linux-x86_64` | Linux (Intel / AMD) |
+| `agentx-linux-arm64` | Linux (ARM, Raspberry Pi, Ampere) |
+| `agentx-macos-x86_64` | macOS (Intel) |
+| `agentx-macos-arm64` | macOS (Apple Silicon M1/M2/M3) |
+| `agentx-windows-x86_64.exe` | Windows |
+
+Then install it:
+```bash
+# Linux / macOS
+chmod +x agentx-linux-x86_64
+sudo mv agentx-linux-x86_64 /usr/local/bin/agentx
+
+# Verify
+agentx --version
+```
+
+### Option 2 — One-line installer (auto-detects platform)
 
 ```bash
-git clone <repo>
-cd agent-system
+curl -fsSL https://raw.githubusercontent.com/YOUR_USER/agentx/main/install.sh | bash
+```
+
+Tries the pre-built binary first; falls back to `uv tool install` or `pip install` if no binary exists for your platform.
+
+### Option 3 — Install from source (needs Python 3.13 + uv)
+
+```bash
+git clone https://github.com/YOUR_USER/agentx
+cd agentx
+uv tool install .
+
+agentx --version
+```
+
+For development (changes take effect immediately):
+```bash
 pip install -e .
 ```
 
-### Binary (single file, no Python needed)
+### Option 4 — Build your own binary
 
 ```bash
-pip install pyinstaller
-pyinstaller \
-  --onefile \
-  --name agentx \
-  --add-data "cli/templates:cli/templates" \
-  cli/app.py
-# Binary: dist/agentx
-```
+git clone https://github.com/YOUR_USER/agentx
+cd agentx
+./build_binary.sh
+# Binary: dist/agentx-<os>-<arch>
 
-After building, copy `dist/agentx` anywhere on your `PATH`.
+sudo mv dist/agentx-linux-arm64 /usr/local/bin/agentx
+agentx --version
+```
 
 ---
 
