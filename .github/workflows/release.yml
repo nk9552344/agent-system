@@ -1,0 +1,208 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  release.yml — Build platform binaries + publish to PyPI on every  v*  tag
+#
+#  Trigger:
+#    git tag v1.0.0
+#    git push origin v1.0.0
+#
+#  What it produces:
+#    GitHub Release with attached binaries:
+#      agentx-linux-x86_64
+#      agentx-linux-arm64
+#      agentx-macos-x86_64
+#      agentx-macos-arm64
+#      agentx-windows-x86_64.exe
+#    PyPI package (pip install agentx)
+#
+#  Secrets required  (Settings → Secrets → Actions):
+#    PYPI_API_TOKEN  — token from pypi.org (for PyPI publishing)
+#                      Not needed if you only want GitHub Releases binaries.
+# ══════════════════════════════════════════════════════════════════════════════
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # needed to create GitHub Releases
+
+jobs:
+  # ── Build standalone binary per platform ─────────────────────────────────────
+  build-binary:
+    name: Binary — ${{ matrix.os-label }}-${{ matrix.arch-label }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            os-label: linux
+            arch-label: x86_64
+            asset-name: agentx-linux-x86_64
+
+          - runner: ubuntu-22.04-arm
+            os-label: linux
+            arch-label: arm64
+            asset-name: agentx-linux-arm64
+
+          - runner: macos-13           # Intel
+            os-label: macos
+            arch-label: x86_64
+            asset-name: agentx-macos-x86_64
+
+          - runner: macos-14           # Apple Silicon
+            os-label: macos
+            arch-label: arm64
+            asset-name: agentx-macos-arm64
+
+          - runner: windows-latest
+            os-label: windows
+            arch-label: x86_64
+            asset-name: agentx-windows-x86_64.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Build binary (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          python -m PyInstaller \
+            --onefile \
+            --name "${{ matrix.asset-name }}" \
+            --collect-all deepagents \
+            --collect-all langchain_core \
+            --collect-all langchain_ollama \
+            --collect-all langgraph \
+            --collect-all lancedb \
+            --collect-all textual \
+            --collect-all rich \
+            --collect-all click \
+            --collect-data cli \
+            --hidden-import yaml \
+            --hidden-import pandas \
+            --hidden-import pypdf \
+            --hidden-import pdfminer \
+            --noconfirm \
+            --log-level WARN \
+            cli/app.py
+          chmod +x "dist/${{ matrix.asset-name }}"
+
+      - name: Build binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --onefile `
+            --name "${{ matrix.asset-name }}" `
+            --collect-all deepagents `
+            --collect-all langchain_core `
+            --collect-all langchain_ollama `
+            --collect-all langgraph `
+            --collect-all lancedb `
+            --collect-all textual `
+            --collect-all rich `
+            --collect-all click `
+            --collect-data cli `
+            --hidden-import yaml `
+            --hidden-import pandas `
+            --hidden-import pypdf `
+            --hidden-import pdfminer `
+            --noconfirm `
+            --log-level WARN `
+            cli/app.py
+
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset-name }}
+          path: dist/${{ matrix.asset-name }}
+          retention-days: 1
+
+  # ── Publish to PyPI ───────────────────────────────────────────────────────────
+  publish-pypi:
+    name: Publish → PyPI
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # for trusted publishing (no API token needed)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build wheel + sdist
+        run: |
+          pip install build
+          python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # Uses OIDC trusted publishing — no token needed if configured on PyPI.
+        # Alternatively: with: password: ${{ secrets.PYPI_API_TOKEN }}
+
+  # ── Create GitHub Release with all binaries ───────────────────────────────────
+  create-release:
+    name: Create GitHub Release
+    needs: build-binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Flatten dist directory
+        run: |
+          find dist/ -mindepth 2 -type f -exec mv {} dist/ \;
+          ls -lh dist/
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract changelog entry
+        id: changelog
+        run: |
+          # Grab the first section from CHANGELOG.md if it exists
+          if [[ -f CHANGELOG.md ]]; then
+            awk '/^## /{if(p)exit; p=1} p' CHANGELOG.md | tail -n +2 > /tmp/notes.md
+          else
+            echo "Release ${{ steps.version.outputs.version }}" > /tmp/notes.md
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "agentx ${{ steps.version.outputs.version }}"
+          body_path: /tmp/notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            dist/agentx-linux-x86_64
+            dist/agentx-linux-arm64
+            dist/agentx-macos-x86_64
+            dist/agentx-macos-arm64
+            dist/agentx-windows-x86_64.exe

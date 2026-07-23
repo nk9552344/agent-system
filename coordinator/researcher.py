@@ -44,10 +44,11 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from agent.core import OllamaDeepAgent
-from coordinator.config import AgentSpec, load_config
+from coordinator.config import AgentSpec, CoordinatorConfig, from_agent_config, load_config
 from coordinator.git_worktree import WorktreeManager
 from deepagents import CompiledSubAgent
 from storage.memory_store import SharedMemoryStore
+from tools.web_tools import WebConfig
 
 logger = logging.getLogger(__name__)
 
@@ -234,13 +235,17 @@ class AutoResearcher:
         self,
         workspace_dir: str | Path,
         user_tools_path: str | Path,
-        config_path: str | Path = "coordinator/config.yml",
+        coordinator_config: CoordinatorConfig | None = None,
         storage_path: str | Path = "data/lancedb",
         memory_store: SharedMemoryStore | None = None,
+        web_config: WebConfig | None = None,
         debug: bool = False,
+        *,
+        config_path: str | Path | None = None,  # legacy — use coordinator_config instead
     ) -> None:
         self._workspace = Path(workspace_dir).resolve()
         self._debug = debug
+        self._web_config = web_config or WebConfig()
         self._current_iteration: int = 0
 
         # Shared mutable state written by tool closures, read by the Python loop
@@ -251,8 +256,15 @@ class AutoResearcher:
         # Load user-defined hooks
         self._eval_fn, self._save_fn = _load_user_tools(Path(user_tools_path))
 
-        # Load coordinator config (model roster)
-        cfg = load_config(config_path)
+        # Resolve coordinator config
+        if coordinator_config is not None:
+            cfg = coordinator_config
+        elif config_path is not None:
+            cfg = load_config(config_path)
+        else:
+            raise ValueError(
+                "AutoResearcher requires either coordinator_config= or config_path=."
+            )
 
         # Shared memory store
         self._store = memory_store or SharedMemoryStore(
@@ -280,6 +292,7 @@ class AutoResearcher:
                 require_permission=False,
                 persistent_memory=True,
                 system_prompt=_specialist_prompt(spec),
+                web_config=self._web_config,
                 debug=debug,
             )
             compiled.append(CompiledSubAgent(
@@ -306,6 +319,7 @@ class AutoResearcher:
             system_prompt=system_prompt,
             subagents=compiled,
             extra_tools=extra_tools,
+            web_config=self._web_config,
             debug=debug,
         )
         self._cfg = cfg

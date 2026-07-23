@@ -43,11 +43,23 @@ from deepagents import (
     create_deep_agent,
 )
 from deepagents.middleware.async_subagents import AsyncSubAgent
+from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware
 from deepagents.backends import FilesystemBackend, LocalShellBackend
+
+# deepagents' built-in file tools require ABSOLUTE paths via a 'file_path' parameter.
+# Models naturally use relative paths with 'path'.  We provide workspace-scoped
+# replacements in make_file_tools that accept relative paths — these names must be
+# excluded from the deepagents tool list so only our versions are visible.
+_REPLACED_TOOLS: frozenset[str] = frozenset({
+    "write_file",
+    "read_file",
+    "edit_file",
+    "list_directory",
+})
 
 from agent.config import AgentConfig
 from storage.memory_store import SharedMemoryStore
-from tools import make_all_tools
+from tools import WebConfig, make_all_tools
 
 # Appended to every agent's system prompt to reduce hallucination.
 _ACCURACY_SUFFIX = """
@@ -146,6 +158,7 @@ class OllamaDeepAgent:
         subagents: Sequence[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
         # --- Extra ---
         extra_tools: Sequence[BaseTool | Callable] | None = None,
+        web_config: WebConfig | None = None,
         debug: bool = False,
         name: str = "ollama-agent",
         checkpointer: BaseCheckpointSaver | None = None,
@@ -216,6 +229,10 @@ class OllamaDeepAgent:
         # --- Middleware -----------------------------------------------------------
         middleware: list[Any] = []
 
+        # Exclude deepagents' built-in file tools that require absolute 'file_path'.
+        # Our workspace-scoped replacements (in make_file_tools) use relative 'path'.
+        middleware.append(_ToolExclusionMiddleware(excluded=_REPLACED_TOOLS))
+
         if memory_files:
             fs_backend = FilesystemBackend(root_dir="/")
             middleware.append(
@@ -251,6 +268,7 @@ class OllamaDeepAgent:
             memory_store=self._memory_store,
             agent_name=name,
             shell_timeout=shell_snippet_timeout,
+            web_config=web_config,
         )
         all_tools: list[BaseTool | Callable] = [*custom_tools, *(extra_tools or [])]
 
@@ -264,7 +282,7 @@ class OllamaDeepAgent:
             system_prompt=combined_prompt,
             middleware=middleware,
             backend=backend,
-            subagents=list(subagents) if subagents else None,
+            subagents=list(subagents) if subagents is not None else None,
             interrupt_on=interrupt_on,
             checkpointer=checkpointer,
             store=store,
@@ -408,6 +426,143 @@ class OllamaDeepAgent:
                 state = snapshot.values if snapshot else {}
             except Exception:
                 state = {}
+
+    def stream_events(
+        self,
+        task: str,
+        *,
+        thread_id: str | None = None,
+        auto_approve: bool = True,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream all agent activity as structured events for real-time TUI display.
+
+        Uses LangChain callbacks so every token fires immediately, regardless of
+        LangGraph's internal streaming mode or middleware buffering.
+
+        Yields dicts:
+          {"kind": "token",       "text": str}
+          {"kind": "tool_call",   "text": str, "tool": str, "args": dict}
+          {"kind": "tool_result", "text": str, "tool": str}
+          {"kind": "status",      "text": str}
+          {"kind": "error",       "text": str}
+        """
+        import json
+        import threading
+        from queue import SimpleQueue
+
+        from langchain_core.callbacks import BaseCallbackHandler
+        from langgraph.types import Command
+
+        tid    = thread_id or self.new_thread_id()
+        config = {"configurable": {"thread_id": tid}}
+
+        _DONE: object = object()
+        q: SimpleQueue = SimpleQueue()
+
+        class _CB(BaseCallbackHandler):
+            def __init__(self) -> None:
+                super().__init__()
+                self._tool_names: dict[str, str] = {}
+
+            # ── token streaming ────────────────────────────────────────────
+            def on_llm_new_token(self, token: str, **_: Any) -> None:
+                if token:
+                    q.put({"kind": "token", "text": token})
+
+            # ── tool lifecycle ─────────────────────────────────────────────
+            def on_tool_start(
+                self,
+                serialized: dict,
+                input_str: Any,
+                *,
+                run_id: Any = None,
+                **_: Any,
+            ) -> None:
+                name = (
+                    serialized.get("name", "") if isinstance(serialized, dict) else ""
+                ) or ""
+                if not name:
+                    return
+                if run_id:
+                    self._tool_names[str(run_id)] = name
+                if isinstance(input_str, dict):
+                    args: dict = input_str
+                elif isinstance(input_str, str):
+                    try:
+                        args = json.loads(input_str)
+                    except Exception:
+                        args = {}
+                else:
+                    args = {}
+                q.put({"kind": "tool_call", "text": name, "tool": name, "args": args})
+
+            def on_tool_end(
+                self,
+                output: Any,
+                *,
+                run_id: Any = None,
+                **_: Any,
+            ) -> None:
+                name = self._tool_names.pop(str(run_id), "") if run_id else ""
+                q.put({"kind": "tool_result", "text": str(output or ""), "tool": name})
+
+            def on_tool_error(
+                self,
+                error: Any,
+                *,
+                run_id: Any = None,
+                **_: Any,
+            ) -> None:
+                name = self._tool_names.pop(str(run_id), "") if run_id else ""
+                q.put({"kind": "error", "text": f"[{name}] {error}"})
+
+        cb = _CB()
+        exc_box: list[BaseException | None] = [None]
+
+        def _invoke(inp: Any) -> None:
+            try:
+                self._graph.invoke(inp, config={**config, "callbacks": [cb]})
+            except Exception as exc:  # noqa: BLE001
+                exc_box[0] = exc
+            finally:
+                q.put(_DONE)
+
+        inp: Any = {"messages": task}
+        while True:
+            exc_box[0] = None
+            t = threading.Thread(target=_invoke, args=(inp,), daemon=True)
+            t.start()
+
+            # Drain the queue until the invoke thread signals done
+            while True:
+                item = q.get()
+                if item is _DONE:
+                    break
+                yield item  # type: ignore[misc]
+
+            t.join()
+
+            if exc_box[0] is not None:
+                yield {"kind": "error", "text": str(exc_box[0])}
+                break
+
+            # Check for HITL interrupt
+            try:
+                snap  = self._graph.get_state(config)
+                state = snap.values if snap else {}
+            except Exception:
+                break
+
+            if not state.get("__interrupt__"):
+                break
+
+            interrupt = state["__interrupt__"][0]
+            if auto_approve:
+                yield {"kind": "status", "text": "Auto-approving action…"}
+                inp = Command(resume=True)
+            else:
+                approved = self._handle_interrupt(interrupt, auto_approve=False)
+                inp = Command(resume=approved)
 
     def invoke_raw(
         self,

@@ -29,8 +29,15 @@ Multi-project / shared memory::
     # Both coordinators and all their specialists share the same memory.
 """
 
-from coordinator.config import AgentSpec, CoordinatorConfig, load_config
+from coordinator.config import AgentSpec, CoordinatorConfig, from_agent_config, load_config
 from coordinator.core import Coordinator
 from coordinator.researcher import AutoResearcher
 
-__all__ = ["AgentSpec", "AutoResearcher", "Coordinator", "CoordinatorConfig", "load_config"]
+__all__ = [
+    "AgentSpec",
+    "AutoResearcher",
+    "Coordinator",
+    "CoordinatorConfig",
+    "from_agent_config",
+    "load_config",
+]

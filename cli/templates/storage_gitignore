@@ -1,0 +1,3 @@
+lancedb/
+*.json
+__pycache__/
