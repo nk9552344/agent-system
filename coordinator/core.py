@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +51,8 @@ MAX_RETRIES = 2
 # -------------------------------------------------------------------------
 
 _COORDINATOR_PROMPT = """You are a coordinator agent. Your role is to manage a team of \
-specialist AI agents and deliver high-quality results by delegating, evaluating, and \
-integrating their work.
+specialist AI agents, gather external knowledge when useful, and deliver high-quality \
+results by delegating, evaluating, and integrating their work.
 
 ## Your team
 
@@ -72,10 +73,32 @@ integrating their work.
 
 4. **Store** each accepted result with ``store_agent_result`` before moving on.
 
-5. **Merge** all specialist branches into the main branch with ``merge_all`` once
+5. **[OPTIONAL] Web Research** — After all specialist results are in, decide whether
+   ingesting external knowledge (GitHub repos, docs, research papers, articles) would
+   meaningfully improve the project. Skip this step if the task is self-contained.
+
+   If external knowledge would help:
+   a. Call ``spawn_web_researchers`` with a list of specific search topics — one agent
+      is spawned per topic, all running in parallel. Each agent searches, fetches, and
+      stores relevant pages into the shared memory RAG automatically.
+   b. Call ``search_web_resources`` to review what was ingested.
+   c. Use insights from ingested content to enrich the next step.
+
+   You can also call ``web_search`` and ``fetch_and_store_url`` directly at any point
+   if you need a specific resource right now.
+
+6. **Hypothesis** — Based on all specialist results and any ingested web resources,
+   form a concrete improvement hypothesis for the user's workspace project:
+   - What specific changes or additions would make this project better?
+   - Which patterns, libraries, or approaches from the web research are relevant?
+   - Rank improvements by expected impact. Name exact files, functions, or techniques.
+   State this hypothesis clearly before the merge step so it is recorded.
+
+7. **Merge** all specialist branches into the main branch with ``merge_all`` once
    every specialist has finished.
 
-6. **Summarise** what was built, which files changed, and any caveats.
+8. **Summarise** what was built, which files changed, the improvement hypothesis,
+   and any caveats.
 
 ## Rules
 
@@ -84,6 +107,7 @@ integrating their work.
   in-progress output (dependencies → sequence; independent work → parallel delegation).
 - Write precise, unambiguous instructions to specialists. Vague prompts cause FAIL verdicts.
 - If a task keeps failing after {max_retries} retries, report the blocker and stop.
+- Web research is optional — only invoke it when external knowledge adds real value.
 """
 
 _AGENT_ROSTER_ENTRY = "- **{name}** ({model}) — expertise: {expertise}\n  {description}"
@@ -134,6 +158,7 @@ class Coordinator:
     ) -> None:
         cfg = load_config(config_path)
         workspace = Path(workspace_dir).resolve()
+        self._workspace = workspace
 
         # --- Shared memory (all agents, including coordinator, share this) --------
         self._store = memory_store or SharedMemoryStore(
@@ -256,6 +281,7 @@ class Coordinator:
         store = self._store
         judge = self._judge
         worktree_mgr = self._worktree_mgr
+        workspace = self._workspace
 
         @tool
         def judge_result(agent_name: str, task_given: str, agent_output: str) -> str:
@@ -321,7 +347,79 @@ class Coordinator:
                 lines.append(f"- {spec.name}: {spec.expertise_line()}")
             return "\n".join(lines)
 
-        return [judge_result, store_agent_result, merge_all, list_specialists]
+        @tool
+        def spawn_web_researchers(topics: list[str]) -> str:
+            """Spawn parallel web-research agents to find and ingest relevant external resources.
+
+            Each topic gets a dedicated agent that:
+            1. Searches the web for relevant articles, GitHub repos, or research papers
+            2. Selects the most useful results
+            3. Fetches and parses each resource
+            4. Stores parsed content in the shared RAG memory (visible to all agents)
+
+            Agents run in parallel — total wall-clock time equals the slowest single topic.
+            Call search_web_resources afterwards to query what was ingested.
+
+            Use this when external knowledge (best practices, reference implementations,
+            papers, documentation) would meaningfully improve the project.
+            Skip it for straightforward or self-contained tasks.
+
+            Args:
+                topics: List of search queries, one per parallel agent.
+                        Be specific: e.g. ['FastAPI dependency injection patterns',
+                        'pytest fixtures best practices', 'SQLite WAL mode Python'].
+            """
+            if not topics:
+                return "No topics provided — skipping web research."
+
+            _WEB_RESEARCHER_PROMPT = (
+                "You are a web research agent. Your sole job is to find, fetch, and "
+                "store relevant external resources for a software project.\n\n"
+                "Workflow:\n"
+                "1. Call web_search with your assigned topic to get candidate URLs.\n"
+                "2. Review the results and pick the 2–3 most relevant ones.\n"
+                "3. Call fetch_and_store_url for each chosen URL with a clear description.\n"
+                "4. Report: what you ingested and the key insight from each resource.\n\n"
+                "Be selective — quality over quantity. Prefer official docs, reputable "
+                "GitHub repos, and peer-reviewed papers over blog posts."
+            )
+
+            def _research_one(topic: str) -> str:
+                agent = OllamaDeepAgent(
+                    model_name=cfg.coordinator.model,
+                    base_url=cfg.coordinator.base_url,
+                    temperature=cfg.coordinator.temperature,
+                    num_ctx=cfg.coordinator.num_ctx,
+                    workspace_dir=workspace,
+                    memory_store=store,
+                    name=f"web-researcher",
+                    require_permission=False,
+                    persistent_memory=False,
+                    system_prompt=_WEB_RESEARCHER_PROMPT,
+                )
+                return agent.run(
+                    f"Research topic: {topic}\n\n"
+                    f"Search for relevant resources, fetch the best ones, store them.",
+                    auto_approve=True,
+                )
+
+            results: list[str] = []
+            max_workers = min(len(topics), 6)
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                future_to_topic = {pool.submit(_research_one, t): t for t in topics}
+                for future in as_completed(future_to_topic):
+                    topic = future_to_topic[future]
+                    try:
+                        summary = future.result()
+                        results.append(f"[{topic}]\n{summary[:400]}")
+                    except Exception as exc:
+                        logger.warning("Web researcher for %r failed: %s", topic, exc)
+                        results.append(f"[{topic}]\nERROR: {exc}")
+
+            header = f"Web research complete — {len(topics)} topic(s) processed in parallel.\n"
+            return header + "\n---\n".join(results)
+
+        return [judge_result, store_agent_result, merge_all, list_specialists, spawn_web_researchers]
 
 
 # -------------------------------------------------------------------------

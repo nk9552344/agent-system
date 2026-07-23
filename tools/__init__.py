@@ -16,6 +16,7 @@ from tools.file_tools import make_file_tools
 from tools.memory_tools import make_memory_tools
 from tools.permission_tools import make_permission_tools
 from tools.shell_tools import make_shell_tools
+from tools.web_tools import make_web_tools
 
 if TYPE_CHECKING:
     from storage.memory_store import SharedMemoryStore
@@ -43,6 +44,7 @@ def make_all_tools(
         *make_memory_tools(memory_store, agent_name=agent_name, session_id=session_id),
         *make_permission_tools(),
         *make_context_tools(workspace_dir),
+        *make_web_tools(memory_store, agent_name=agent_name),
     ]
 
 
@@ -53,4 +55,5 @@ __all__ = [
     "make_memory_tools",
     "make_permission_tools",
     "make_shell_tools",
+    "make_web_tools",
 ]
