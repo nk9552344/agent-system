@@ -1,86 +1,15 @@
-"""Context and environment awareness tools.
-
-These help the agent understand the runtime environment, reducing
-hallucinated assumptions about Python version, OS, installed packages, etc.
-"""
+"""Context tools — git status only. Use execute() for env/package queries."""
 
 from __future__ import annotations
 
-import os
-import platform
 import subprocess
-import sys
 from pathlib import Path
 
 from langchain_core.tools import BaseTool, tool
 
 
 def make_context_tools(workspace_dir: Path) -> list[BaseTool]:
-    """Return context/environment tools scoped to workspace_dir."""
-
-    @tool
-    def get_env_info() -> str:
-        """Return OS, Python version, workspace path, and available package managers."""
-        info: dict[str, str] = {
-            "os": f"{platform.system()} {platform.release()} ({platform.machine()})",
-            "python": sys.version.split()[0],
-            "python_executable": sys.executable,
-            "workspace_dir": str(workspace_dir.resolve()),
-            "cwd": str(Path.cwd()),
-            "home": str(Path.home()),
-            "path_entries": str(len(os.environ.get("PATH", "").split(":"))),
-        }
-
-        # Check for virtual env / uv
-        venv = os.environ.get("VIRTUAL_ENV") or os.environ.get("CONDA_DEFAULT_ENV")
-        if venv:
-            info["virtual_env"] = venv
-
-        # Check package manager availability
-        for mgr in ("uv", "pip", "pip3", "conda"):
-            result = subprocess.run(["which", mgr], capture_output=True, text=True)
-            if result.returncode == 0:
-                info[f"{mgr}_available"] = result.stdout.strip()
-
-        lines = [f"  {k}: {v}" for k, v in info.items()]
-        return "Environment:\n" + "\n".join(lines)
-
-    @tool
-    def get_installed_packages(filter_prefix: str = "") -> str:
-        """List installed Python packages, optionally filtered by name prefix."""
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "list", "--format=columns"],
-            capture_output=True,
-            text=True,
-            cwd=str(workspace_dir),
-        )
-        if result.returncode != 0:
-            # Try uv pip list as fallback
-            result = subprocess.run(
-                ["uv", "pip", "list"],
-                capture_output=True,
-                text=True,
-                cwd=str(workspace_dir),
-            )
-
-        output = result.stdout or result.stderr
-        if filter_prefix:
-            lines = [ln for ln in output.splitlines() if ln.lower().startswith(filter_prefix.lower()) or "Package" in ln or "---" in ln]
-            return "\n".join(lines) if lines else f"No packages found with prefix '{filter_prefix}'."
-        return output.strip() or "Could not list packages."
-
-    @tool
-    def verify_import(module_name: str) -> str:
-        """Check if a Python module can be imported (confirms it is installed)."""
-        result = subprocess.run(
-            [sys.executable, "-c", f"import {module_name}; print('ok')"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return f"'{module_name}' can be imported successfully."
-        error = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "unknown error"
-        return f"'{module_name}' CANNOT be imported: {error}"
+    """Return context tools scoped to workspace_dir."""
 
     @tool
     def get_git_status() -> str:
@@ -110,4 +39,4 @@ def make_context_tools(workspace_dir: Path) -> list[BaseTool]:
         ]
         return "\n".join(parts)
 
-    return [get_env_info, get_installed_packages, verify_import, get_git_status]
+    return [get_git_status]

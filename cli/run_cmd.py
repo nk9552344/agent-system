@@ -55,7 +55,7 @@ Example: write_file(file_path="{workspace}/README.md", content="...")
 | find files by pattern            | glob(pattern="...", path="{workspace}")   |
 | search inside files              | grep(pattern="...", path="{workspace}")   |
 | git status / history             | execute(command="git status") or get_git_status() |
-| environment / python info        | get_env_info()                            |
+| python version / OS / env vars   | execute(command="python3 --version") etc. |
 
 ## Rules
 
