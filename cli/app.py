@@ -82,11 +82,11 @@ def init(force: bool) -> None:
 )
 @click.option(
     "--config", "-c",
-    default="agent_config.yml",
+    default=".agentx/agent_config.yml",
     show_default=True,
     type=click.Path(dir_okay=False),
     metavar="FILE",
-    help="Path to agent_config.yml.",
+    help="Path to agent_config.yml (default: .agentx/agent_config.yml).",
 )
 def run(mode: str, prompt: str | None, prompt_file: str | None, config: str) -> None:
     """Start the agent in the given MODE and open the interactive terminal UI.

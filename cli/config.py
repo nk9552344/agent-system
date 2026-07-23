@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 
-CONFIG_FILENAME = "agent_config.yml"
+CONFIG_FILENAME = ".agentx/agent_config.yml"
 
 
 class ConfigError(Exception):
@@ -66,7 +66,7 @@ class CliConfig:
         if not p.exists():
             raise ConfigError(
                 f"Config file not found: {p}\n"
-                f"Run  agentx init  to create it in the current directory."
+                f"Run  agentx init  to create .agentx/agent_config.yml in this directory."
             )
 
         raw: dict = yaml.safe_load(p.read_text(encoding="utf-8")) or {}

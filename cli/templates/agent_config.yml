@@ -82,8 +82,8 @@ researcher:
 # ── Shared storage (LanceDB vector database) ─────────────────────────────────
 # All agents — both modes — share this store for RAG memory.
 storage:
-  path: agent_storage/lancedb       # created automatically on first run
-  embedding_model: nomic-embed-text # run:  ollama pull nomic-embed-text
+  path: .agentx/agent_storage/lancedb  # created automatically on first run
+  embedding_model: nomic-embed-text     # run:  ollama pull nomic-embed-text
 
 # ── Web tools ─────────────────────────────────────────────────────────────────
 # Available to every agent at any time (web search, GitHub, PDFs, HTML scraping).

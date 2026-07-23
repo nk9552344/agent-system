@@ -63,18 +63,24 @@ def _print_response(text: str, label: str = "Agent") -> None:
 # ─── Config / prompt loading ──────────────────────────────────────────────────
 
 def _load_config(path: str) -> dict:
-    """Load agent_config.yml (preferred) or fall back to config.yml."""
-    # Prefer agent_config.yml (new single-file format)
-    preferred = Path(path)
-    if not preferred.exists() and path == "config.yml":
-        alt = Path("agent_config.yml")
-        if alt.exists():
-            preferred = alt
-    if not preferred.exists():
+    """Locate and load the config file.
+
+    Search order when the default path is used:
+      1. .agentx/agent_config.yml   (new standard location)
+      2. agent_config.yml           (flat layout, legacy)
+      3. config.yml                 (original legacy format)
+    """
+    p = Path(path)
+    if not p.exists() and path == "config.yml":
+        for alt in (".agentx/agent_config.yml", "agent_config.yml"):
+            if Path(alt).exists():
+                p = Path(alt)
+                break
+    if not p.exists():
         _error(f"Config file not found: {path}")
-        _error("Run  agentx init  to create agent_config.yml in the current directory.")
+        _error("Run  agentx init  to create .agentx/agent_config.yml in this directory.")
         sys.exit(1)
-    with preferred.open() as f:
+    with p.open() as f:
         return yaml.safe_load(f) or {}
 
 def _load_prompt(path: str) -> str | None:
